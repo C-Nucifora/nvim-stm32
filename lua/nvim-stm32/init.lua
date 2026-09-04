@@ -44,17 +44,36 @@ function M.resolve_project(dir)
   return require("nvim-stm32.discover.project").resolve(dir)
 end
 
+--- Enumerate probes and save a selection for the current project.
+---@param opts? table
+---@param callback? fun(probe: table, project: table)
+---@return table|nil
+function M.select_probe(opts, callback)
+  return require("nvim-stm32.ui.probes").select(opts, callback)
+end
+
 local function operation_module(kind)
+  if kind == "build" or kind == "clean" or kind == "rebuild" then
+    return require("nvim-stm32.operations.build")
+  end
+  if kind == "analyze" then
+    return require("nvim-stm32.operations.analyze")
+  end
+  if kind == "flash" or kind == "erase" or kind == "reset" then
+    return require("nvim-stm32.operations.flash")
+  end
+  if kind == "monitor" then
+    return require("nvim-stm32.operations.monitor")
+  end
   if kind ~= "build" then
     return nil,
       require("nvim-stm32.model").error({
         code = "operation-kind-unsupported",
         message = "nvim-stm32: unsupported operation kind " .. tostring(kind),
         operation = tostring(kind),
-        hint = "use the build operation",
+        hint = "use build, analyze, flash, erase, reset, or monitor",
       })
   end
-  return require("nvim-stm32.operations.build")
 end
 
 --- Plan an operation without running it.
@@ -62,6 +81,8 @@ end
 ---@param opts? table
 ---@return table|nil, table|nil
 function M.plan(kind, opts)
+  local allow_target_mismatch = type(opts) == "table"
+    and opts.allow_target_mismatch == true
   opts = vim.deepcopy(opts or {})
   local operations, kind_err = operation_module(kind)
   if not operations then
@@ -76,8 +97,15 @@ function M.plan(kind, opts)
     end
   end
   opts.project = nil
+  if kind == "clean" or kind == "rebuild" then
+    opts.mode = kind
+  end
   local resolved = vim.tbl_deep_extend("force", M.get_config(), opts)
   resolved.configuration = opts.configuration or opts.preset or resolved.preset
+  if kind == "flash" or kind == "erase" or kind == "reset" then
+    resolved.allow_target_mismatch = allow_target_mismatch
+    return operations.plan(kind, project, resolved)
+  end
   return operations.plan(project, resolved)
 end
 
@@ -87,6 +115,9 @@ end
 ---@param callback? function
 ---@return table|nil, table|nil
 function M.run(kind, opts, callback)
+  if kind == "flash" or kind == "erase" or kind == "reset" then
+    return require("nvim-stm32.operations.flash").current(kind, opts, callback)
+  end
   local plan, plan_err = M.plan(kind, opts)
   if not plan then
     return nil, plan_err

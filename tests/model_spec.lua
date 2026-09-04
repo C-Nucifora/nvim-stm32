@@ -76,6 +76,33 @@ describe("model records", function()
     assert.equals(0, #image.target.cores)
   end)
 
+  it("constructs a probe with observed target state", function()
+    local probe = model.probe({
+      backend = "cubeprogrammer",
+      serial = "066DFF555157847867211145",
+      transport = "swd",
+      firmware = "V3J13M4",
+      voltage_mv = 3300,
+      target = { identity = { cpn = "STM32F429ZITx" } },
+      provenance = { source = "STM32_Programmer_CLI" },
+    })
+
+    assert.equals("cubeprogrammer", probe.backend)
+    assert.equals("066DFF555157847867211145", probe.serial)
+    assert.equals("V3J13M4", probe.firmware)
+    assert.equals(3300, probe.voltage_mv)
+    assert.equals("STM32F429ZITx", probe.target.identity.cpn)
+  end)
+
+  it("rejects probes without a serial number", function()
+    assert.has_error(function()
+      model.probe({ backend = "cubeprogrammer" })
+    end)
+    assert.has_error(function()
+      model.probe({ backend = "cubeprogrammer", serial = "" })
+    end)
+  end)
+
   it("validates the remaining record shapes", function()
     local config = model.configuration({
       name = "Debug",
@@ -146,6 +173,44 @@ describe("model records", function()
         images = { "app" },
         commands = { { argv = {} } },
         locks = {},
+        reset_policy = "none",
+      })
+    end)
+  end)
+
+  it("normalizes dense lock records in plans", function()
+    local locks = { { kind = "probe", id = "066DFF555157847867211145" } }
+    local plan = model.plan({
+      id = "op-1",
+      kind = "flash",
+      project_id = "/fw",
+      images = { "app" },
+      commands = {},
+      locks = locks,
+      reset_policy = "run-after-verify",
+    })
+    locks[1].id = "changed"
+
+    assert.same({ { kind = "probe", id = "066DFF555157847867211145" } }, plan.locks)
+    assert.has_error(function()
+      model.plan({
+        id = "op-2",
+        kind = "flash",
+        project_id = "/fw",
+        images = { "app" },
+        commands = {},
+        locks = { [2] = { kind = "probe", id = "one" } },
+        reset_policy = "none",
+      })
+    end)
+    assert.has_error(function()
+      model.plan({
+        id = "op-3",
+        kind = "flash",
+        project_id = "/fw",
+        images = { "app" },
+        commands = {},
+        locks = { { kind = "probe" } },
         reset_policy = "none",
       })
     end)

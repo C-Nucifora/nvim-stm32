@@ -47,6 +47,8 @@ describe("nvim-stm32.targets.resolve", function()
     assert.equals(2048, t.flash_kb)
     assert.equals(256, t.ram_kb)
     assert.equals("target/stm32f4x.cfg", t.openocd_cfg)
+    assert.same({ 0x419 }, t.debug_ids)
+    assert.equals(0xE0042000, t.debug_idcode_address)
   end)
 
   it("resolves family facts from a wildcard part number, minus the memory", function()
@@ -92,6 +94,16 @@ describe("nvim-stm32.targets.resolve", function()
 
   it("returns nil for an unparseable part number", function()
     assert.is_nil(targets.resolve("nonsense"))
+  end)
+end)
+
+describe("nvim-stm32.targets observed devices", function()
+  it("records the shared F42x/F43x debug id without a family branch", function()
+    assert.same({
+      device = "STM32F429",
+      debug_ids = { 0x419 },
+      debug_idcode_address = 0xE0042000,
+    }, targets.observed_devices.STM32F429)
   end)
 end)
 

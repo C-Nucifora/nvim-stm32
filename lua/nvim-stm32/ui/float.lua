@@ -74,7 +74,7 @@ function Presenter:finish(ok)
     self:_write({ partial })
   end
 
-  if ok then
+  if ok and self.close_on_success then
     vim.defer_fn(function()
       self:close()
     end, self.close_on_success_ms)
@@ -97,18 +97,24 @@ local function native_window(buf, title, config)
   })
 end
 
-function M.open(target, config, on_close)
+function M.open(target, config, options, on_close)
+  if type(options) == "function" then
+    on_close = options
+    options = nil
+  end
+  options = options or {}
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].swapfile = false
   vim.bo[buf].filetype = "nvim-stm32-output"
 
   local label = target.mcu or target.family or "unknown target"
-  local title = " nvim-stm32 build: " .. label .. " "
+  local title = options.title or " nvim-stm32 build: " .. label .. " "
   local presenter = setmetatable({
     buf = buf,
     partial = "",
     empty = true,
+    close_on_success = options.close_on_success ~= false,
     close_on_success_ms = config.float.close_on_success_ms,
   }, Presenter)
 

@@ -1,4 +1,8 @@
 local health = require("nvim-stm32.health")
+local devices = require("nvim-stm32.monitor.devices")
+local probes = require("nvim-stm32.probes")
+local process = require("nvim-stm32.process")
+local tools = require("nvim-stm32.tools")
 
 describe("nvim-stm32.health.tool_status", function()
   it("reports a found tool with its path", function()
@@ -29,6 +33,70 @@ describe("nvim-stm32.health.tool_status", function()
     local level, msg = health.tool_status("cmake", "", nil)
     assert.equals("warn", level)
     assert.is_truthy(msg:find("not found", 1, true))
+  end)
+end)
+
+describe("nvim-stm32.health UART monitor status", function()
+  it(
+    "reports support, tools, configured validity, and current candidates passively",
+    function()
+      local globs = {}
+      local stats = {}
+      local statuses = health.monitor_status({
+        monitor = { device = "/dev/cu.usbmodem7" },
+      }, {
+        platform = "Darwin",
+        exepath = function(name)
+          return name == "stty" and "/bin/stty" or ""
+        end,
+        glob = function(pattern)
+          globs[#globs + 1] = pattern
+          return { "/dev/cu.usbmodem8", "/dev/cu.usbmodem7" }
+        end,
+        stat = function(path)
+          stats[#stats + 1] = path
+          return { type = "char" }
+        end,
+      })
+
+      assert.same({ "/dev/cu.usbmodem*" }, globs)
+      assert.same({
+        "/dev/cu.usbmodem7",
+        "/dev/cu.usbmodem7",
+        "/dev/cu.usbmodem8",
+      }, stats)
+      assert.same({
+        { level = "ok", message = "UART platform: Darwin" },
+        { level = "ok", message = "stty: /bin/stty" },
+        { level = "warn", message = "cat not found" },
+        { level = "ok", message = "configured UART device: /dev/cu.usbmodem7" },
+        {
+          level = "info",
+          message = "UART candidates: /dev/cu.usbmodem7, /dev/cu.usbmodem8",
+        },
+      }, statuses)
+    end
+  )
+
+  it("reports unsupported platforms without scanning device paths", function()
+    local scans = 0
+    local statuses = health.monitor_status({ monitor = {} }, {
+      platform = "Windows_NT",
+      exepath = function()
+        return ""
+      end,
+      glob = function()
+        scans = scans + 1
+      end,
+      stat = function()
+        scans = scans + 1
+      end,
+    })
+
+    assert.equals(0, scans)
+    assert.equals("warn", statuses[1].level)
+    assert.matches("unsupported", statuses[1].message, 1, true)
+    assert.matches("UART candidates: unavailable", statuses[5].message, 1, true)
   end)
 end)
 
@@ -112,6 +180,72 @@ describe("nvim-stm32.health.check", function()
     local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
     assert.is_truthy(out:find("nvim-stm32: programmers", 1, true))
     assert.is_falsy(out:find("stack traceback", 1, true))
+    vim.cmd("bwipeout!")
+  end)
+
+  it("resolves programmer tools without enumerating probes", function()
+    local original_programmer = tools.programmer
+    local original_enumerate = probes.enumerate
+    local programmer_resolutions = 0
+    local enumerations = 0
+    tools.programmer = function()
+      programmer_resolutions = programmer_resolutions + 1
+      return nil
+    end
+    probes.enumerate = function()
+      enumerations = enumerations + 1
+      error("health must not enumerate probes")
+    end
+
+    local ok, err = pcall(function()
+      vim.cmd("checkhealth nvim-stm32")
+    end)
+    tools.programmer = original_programmer
+    probes.enumerate = original_enumerate
+
+    assert.is_true(ok, err)
+    assert.is_true(programmer_resolutions > 0)
+    assert.equals(0, enumerations)
+    vim.cmd("bwipeout!")
+  end)
+
+  it("discovers UART paths without opening devices or starting a process", function()
+    local original_list = devices.list
+    local original_run = process.run
+    local discoveries = 0
+    local process_runs = 0
+    devices.list = function()
+      discoveries = discoveries + 1
+      return {}
+    end
+    process.run = function()
+      process_runs = process_runs + 1
+      error("health must not start a monitor")
+    end
+
+    local ok, err = pcall(function()
+      vim.cmd("checkhealth nvim-stm32")
+    end)
+    devices.list = original_list
+    process.run = original_run
+
+    assert.is_true(ok, err)
+    assert.is_true(discoveries > 0)
+    assert.equals(0, process_runs)
+    vim.cmd("bwipeout!")
+  end)
+
+  it("states the passive software boundary without touching hardware", function()
+    vim.cmd("checkhealth nvim-stm32")
+    local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+
+    assert.matches(
+      "no probe connection, reset, erase, or program command",
+      out,
+      1,
+      true
+    )
+    assert.matches("NUCLEO%-F429ZI hardware validation remains", out)
     vim.cmd("bwipeout!")
   end)
 end)

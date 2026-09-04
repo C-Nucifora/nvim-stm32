@@ -14,6 +14,10 @@ local function optional_string(name, value)
   vim.validate(name, value, "string", true)
 end
 
+local function optional_number(name, value)
+  vim.validate(name, value, "number", true)
+end
+
 local function list(name, value, predicate, message, non_empty)
   vim.validate(name, value, function(v)
     if type(v) ~= "table" then
@@ -122,6 +126,7 @@ function M.artifact(spec)
   required_string("artifact.configuration", out.configuration)
   required_string("artifact.build_target", out.build_target)
   vim.validate("artifact.modified_ns", out.modified_ns, "number")
+  vim.validate("artifact.size", out.size, "number", true)
   out.path = vim.fs.normalize(out.path)
   out.provenance = out.provenance or {}
   vim.validate("artifact.provenance", out.provenance, "table")
@@ -141,6 +146,28 @@ function M.command(spec)
   return out
 end
 
+function M.lock(spec)
+  vim.validate("lock", spec, "table")
+  local out = copy(spec)
+  required_string("lock.kind", out.kind)
+  required_string("lock.id", out.id)
+  return out
+end
+
+function M.probe(spec)
+  vim.validate("probe", spec, "table")
+  local out = copy(spec)
+  required_string("probe.backend", out.backend)
+  required_string("probe.serial", out.serial)
+  optional_string("probe.transport", out.transport)
+  optional_string("probe.firmware", out.firmware)
+  vim.validate("probe.target", out.target, "table", true)
+  optional_number("probe.voltage_mv", out.voltage_mv)
+  out.provenance = out.provenance or {}
+  vim.validate("probe.provenance", out.provenance, "table")
+  return out
+end
+
 function M.plan(spec)
   vim.validate("plan", spec, "table")
   local out = copy(spec)
@@ -154,7 +181,12 @@ function M.plan(spec)
   for index, command in ipairs(out.commands) do
     out.commands[index] = M.command(command)
   end
-  vim.validate("plan.locks", out.locks, "table")
+  list("plan.locks", out.locks, function(item)
+    return type(item) == "table"
+  end, "a dense list of locks")
+  for index, lock in ipairs(out.locks) do
+    out.locks[index] = M.lock(lock)
+  end
   required_string("plan.reset_policy", out.reset_policy)
   return out
 end

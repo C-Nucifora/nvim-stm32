@@ -52,6 +52,19 @@ describe("nvim-stm32.ui.float", function()
     )
   end)
 
+  it("uses a caller-supplied operation title", function()
+    local title = " nvim-stm32 reset: STM32F429ZITx "
+    local presenter = float.open(target, config(), { title = title })
+    presenters[#presenters + 1] = presenter
+
+    assert.matches(
+      "nvim-stm32 reset: STM32F429ZITx",
+      vim.inspect(vim.api.nvim_win_get_config(presenter.win).title),
+      1,
+      true
+    )
+  end)
+
   it("keeps failed output open and flushes its last partial line", function()
     local presenter = float.open(target, config())
     presenters[#presenters + 1] = presenter
@@ -75,6 +88,18 @@ describe("nvim-stm32.ui.float", function()
     assert.is_true(vim.wait(100, function()
       return not vim.api.nvim_win_is_valid(presenter.win)
     end))
+  end)
+
+  it("keeps successful output open when auto-close is disabled", function()
+    local presenter = float.open(target, config(0), { close_on_success = false })
+    presenters[#presenters + 1] = presenter
+
+    presenter:finish(true)
+    vim.wait(25, function()
+      return false
+    end)
+
+    assert.is_true(vim.api.nvim_win_is_valid(presenter.win))
   end)
 
   it("calls on_close once for a user-closed native window", function()

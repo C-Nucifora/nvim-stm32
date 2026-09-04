@@ -14,10 +14,34 @@ function M.lines(plan)
     "Project: " .. plan.project_id,
     "Configuration: " .. configuration,
     "Images: " .. table.concat(plan.images, ", "),
+    "Reset policy: " .. plan.reset_policy,
   }
+  if plan.metadata and plan.metadata.backend then
+    lines[#lines + 1] = "Backend: " .. plan.metadata.backend
+  end
+  if plan.metadata and plan.metadata.probe then
+    lines[#lines + 1] = "Probe: " .. plan.metadata.probe.serial
+  end
+  for _, item in ipairs(plan.metadata and plan.metadata.layout or {}) do
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Image: " .. item.image_id
+    lines[#lines + 1] = "Artifact: " .. item.artifact.path
+    if item.embedded_address then
+      lines[#lines + 1] = "Address: embedded in ELF"
+    else
+      lines[#lines + 1] = string.format("Address: 0x%08X", item.address)
+    end
+  end
   for index, command in ipairs(plan.commands) do
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Command " .. index
+    local step = plan.metadata and plan.metadata.steps and plan.metadata.steps[index]
+    if step then
+      lines[#lines + 1] = "Phase: " .. step.phase
+      if step.image_id then
+        lines[#lines + 1] = "Image: " .. step.image_id
+      end
+    end
     lines[#lines + 1] = "Cwd: " .. (command.cwd or "")
     lines[#lines + 1] = "Argv: " .. escaped_argv(command.argv)
   end
@@ -37,6 +61,10 @@ function M.show(plan)
 end
 
 function M.current(kind, opts)
+  opts = vim.deepcopy(opts or {})
+  if kind == "erase" then
+    opts.preview = true
+  end
   local plan, err = require("nvim-stm32").plan(kind or "build", opts)
   if not plan then
     vim.notify(err.message or tostring(err), vim.log.levels.WARN)

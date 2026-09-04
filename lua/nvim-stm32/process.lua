@@ -3,6 +3,14 @@ local M = { system = vim.system }
 local DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 local next_operation_id = 0
 
+function M.succeeded(result)
+  return type(result) == "table"
+    and result.code == 0
+    and (result.signal or 0) == 0
+    and result.cancelled ~= true
+    and result.timed_out ~= true
+end
+
 local function close_timer(timer)
   if not timer or timer:is_closing() then
     return
@@ -37,14 +45,14 @@ local function command_options(command, opts)
   return {
     cwd = command.cwd or opts.cwd,
     env = env,
-    text = true,
+    text = command.lifecycle ~= "stream",
   }
 end
 
 --- Run CommandSpec records or argv arrays in sequence, stopping at the first failure.
 ---@param commands (table|string[])[]
----@param opts { cwd?: string, env?: table<string, string>, on_output?: fun(chunk: string), max_output_bytes?: integer, timeout_ms?: integer, streaming?: boolean, toolchain_path?: string }
----@param callback fun(result: { code: integer, signal: integer, output: string, command: string[]|nil, cancelled: boolean, timed_out: boolean, truncated: boolean, started_ns: integer, ended_ns: integer })
+---@param opts { cwd?: string, env?: table<string, string>, on_output?: fun(chunk: string), after_command?: fun(result: table): boolean|nil, table|nil, max_output_bytes?: integer, timeout_ms?: integer, streaming?: boolean, toolchain_path?: string }
+---@param callback fun(result: { code: integer, signal: integer, output: string, command: string[]|nil, command_index: integer|nil, commands: table[], error: table|nil, cancelled: boolean, timed_out: boolean, truncated: boolean, started_ns: integer, ended_ns: integer })
 ---@return { id: integer, state: fun(): string, cancel: fun(reason?: string): boolean, pid: fun(): integer|nil }
 function M.run(commands, opts, callback)
   opts = opts or {}
@@ -62,6 +70,9 @@ function M.run(commands, opts, callback)
   local timed_out = false
   local finished = false
   local last_command
+  local command_index
+  local command_output = ""
+  local command_results = {}
   local started_ns = vim.uv.hrtime()
   local max_output_bytes = opts.max_output_bytes or DEFAULT_MAX_OUTPUT_BYTES
 
@@ -72,7 +83,7 @@ function M.run(commands, opts, callback)
     timeout_timer = nil
   end
 
-  local function finish(code, signal, command)
+  local function finish(code, signal, command, err)
     if finished then
       return
     end
@@ -85,6 +96,9 @@ function M.run(commands, opts, callback)
       signal = signal or 0,
       output = output,
       command = command or last_command,
+      command_index = command_index,
+      commands = vim.deepcopy(command_results),
+      error = err,
       cancelled = cancelled,
       timed_out = timed_out,
       truncated = truncated,
@@ -103,6 +117,10 @@ function M.run(commands, opts, callback)
       output = output:sub(#output - max_output_bytes + 1)
       truncated = true
     end
+    command_output = command_output .. chunk
+    if #command_output > max_output_bytes then
+      command_output = command_output:sub(#command_output - max_output_bytes + 1)
+    end
 
     if opts.on_output then
       schedule(function()
@@ -112,11 +130,21 @@ function M.run(commands, opts, callback)
   end
 
   local function cancel_active(reason, expected_child)
-    if finished or not active_child or state == "cancelling" then
+    if finished or state == "cancelling" then
       return false
     end
     if expected_child and active_child ~= expected_child then
       return false
+    end
+
+    if not active_child then
+      if state ~= "between_commands" then
+        return false
+      end
+      cancelled = true
+      state = "cancelling"
+      finish(0, 0, last_command)
+      return true
     end
 
     if reason == "timeout" then
@@ -172,6 +200,8 @@ function M.run(commands, opts, callback)
 
     command = normalize(command)
     last_command = command.argv
+    command_index = index
+    command_output = ""
     state = "running"
     local child
     local early_exit
@@ -184,15 +214,30 @@ function M.run(commands, opts, callback)
       end
       active_child = nil
       clear_child_timers()
+      state = commands[index + 1] and "between_commands" or "completing"
+      local command_result = {
+        argv = vim.deepcopy(command.argv),
+        output = command_output,
+        code = result.code or 0,
+        signal = result.signal or 0,
+      }
+      command_results[#command_results + 1] = command_result
       vim.schedule(function()
         if finished then
           return
         end
-        if cancelled or result.code ~= 0 then
+        if cancelled or result.code ~= 0 or (result.signal or 0) ~= 0 then
           finish(result.code, result.signal, command.argv)
-        else
-          run_next()
+          return
         end
+        if opts.after_command then
+          local continue, err = opts.after_command(vim.deepcopy(command_result))
+          if continue == nil and err ~= nil then
+            finish(result.code, result.signal, command.argv, err)
+            return
+          end
+        end
+        run_next()
       end)
     end
     local function on_exit(result)

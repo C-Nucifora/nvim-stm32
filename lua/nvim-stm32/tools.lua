@@ -145,6 +145,20 @@ function M.gdb(cfg)
   return resolve_toolchain("arm-none-eabi-gdb", cfg, cfg.gdb_path)
 end
 
+--- arm-none-eabi-size, or nil.
+---@param cfg Stm32Config
+---@return string|nil
+function M.size(cfg)
+  return resolve_toolchain("arm-none-eabi-size", cfg, nil)
+end
+
+--- arm-none-eabi-objdump, or nil.
+---@param cfg Stm32Config
+---@return string|nil
+function M.objdump(cfg)
+  return resolve_toolchain("arm-none-eabi-objdump", cfg, nil)
+end
+
 --- openocd, or nil.
 ---@param cfg Stm32Config
 ---@return string|nil
@@ -157,6 +171,22 @@ end
 ---@return string|nil
 function M.stlink(cfg)
   return M.resolve("st-flash", cfg.stlink_path)
+end
+
+--- st-info from the explicit st-flash installation, or from PATH.
+---
+--- Keeping the sibling lookup first prevents a configured stlink installation
+--- from being mixed with an unrelated st-info version on PATH.
+---@param cfg Stm32Config
+---@return string|nil
+function M.stinfo(cfg)
+  if cfg.stlink_path and cfg.stlink_path ~= "" then
+    local sibling = vim.fs.dirname(vim.fs.normalize(cfg.stlink_path)) .. "/st-info"
+    if vim.fn.executable(sibling) == 1 then
+      return sibling
+    end
+  end
+  return M.resolve("st-info", nil)
 end
 
 return M

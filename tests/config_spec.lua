@@ -44,6 +44,14 @@ describe("nvim-stm32.config", function()
     end)
   end)
 
+  it("requires monitor baud to be a positive integer", function()
+    for _, baud in ipairs({ 0, -1, 115200.5, "115200" }) do
+      assert.has_error(function()
+        config.resolve({ monitor = { baud = baud } })
+      end)
+    end
+  end)
+
   it("rejects an unknown flash backend", function()
     assert.has_error(function()
       config.resolve({ flash_order = { "jlink" } })

@@ -19,6 +19,7 @@ local function empty_state(root)
     image_id = nil,
     configuration = nil,
     probe_serial = nil,
+    monitor_device = nil,
     artifacts = {},
     last_result = nil,
   }

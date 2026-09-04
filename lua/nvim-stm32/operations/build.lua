@@ -1,17 +1,156 @@
+local artifacts = require("nvim-stm32.discover.artifacts")
+local file_api = require("nvim-stm32.build.file_api")
 local model = require("nvim-stm32.model")
 local presets = require("nvim-stm32.build.presets")
+local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
+local context = require("nvim-stm32.operations.context")
 
 local M = {}
 
 local next_plan_id = 0
 
-local function build_error(code, message, hint)
+local function operation_error(code, message, plan, process_result)
   return model.error({
     code = code,
     message = "nvim-stm32: " .. message,
-    operation = "build",
-    hint = hint or "check the project build configuration and try again",
+    operation = plan.kind,
+    command = process_result and process_result.command or nil,
+    output = process_result and process_result.output or nil,
+    hint = "inspect the operation output and try again",
+  })
+end
+
+local function failure(plan, err, process_result)
+  process_result = process_result or {}
+  return model.result({
+    ok = false,
+    code = process_result.code or -1,
+    output = process_result.output or "",
+    artifacts = {},
+    error = err,
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id },
+  })
+end
+
+local function selected_project(plan)
+  local wanted = {}
+  for _, image_id in ipairs(plan.images) do
+    wanted[image_id] = true
+  end
+  local selected = vim.deepcopy(plan.metadata.project)
+  selected.images = vim.tbl_filter(function(image)
+    return wanted[image.id]
+  end, selected.images)
+  return selected
+end
+
+local function selected_reply(plan, reply)
+  local target_names = {}
+  for _, image in ipairs(selected_project(plan).images) do
+    if image.build_target then
+      target_names[image.build_target] = true
+    end
+  end
+  local targets = reply.targets or {}
+  if type(reply.configurations) == "table" then
+    local configuration_name = plan.metadata.configuration.file_api_configuration
+      or plan.metadata.configuration.name
+    if #reply.configurations == 1 then
+      targets = reply.configurations[1].targets or {}
+    else
+      targets = {}
+      for _, configuration in ipairs(reply.configurations) do
+        if configuration.name == configuration_name then
+          targets = configuration.targets or {}
+          break
+        end
+      end
+    end
+  end
+  return {
+    targets = vim.tbl_filter(function(target)
+      return vim.tbl_isempty(target_names) or target_names[target.name]
+    end, targets),
+  }
+end
+
+local function build_artifacts(plan)
+  local metadata = plan.metadata
+  local selected = selected_project(plan)
+  local configuration = metadata.configuration
+  if metadata.file_api then
+    local reply, reply_err = file_api.reply(configuration.binary_dir)
+    if not reply then
+      return nil, reply_err
+    end
+    return artifacts.from_cmake(
+      selected,
+      configuration,
+      selected_reply(plan, reply),
+      plan.id
+    )
+  end
+  return artifacts.from_tree(selected, configuration, plan.id)
+end
+
+local function successful_result(plan, process_result)
+  local found, artifact_err = build_artifacts(plan)
+  if not found then
+    return nil, artifact_err
+  end
+  local result = model.result({
+    ok = true,
+    code = process_result.code,
+    output = process_result.output or "",
+    artifacts = found,
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id },
+  })
+  local elves = artifacts.for_image(result.artifacts, plan.images[1], "elf")
+  if #plan.images == 1 and #elves == 1 then
+    result.elf = elves[1].path
+  end
+  return model.result(result)
+end
+
+local function successful_clean_result(plan, process_result)
+  local selected = {}
+  for _, image_id in ipairs(plan.images) do
+    selected[image_id] = true
+  end
+  local configuration = plan.metadata.configuration.name
+  local state = session.get(plan.project_id)
+  state.artifacts = vim.tbl_filter(function(artifact)
+    return not (selected[artifact.image_id] and artifact.configuration == configuration)
+  end, state.artifacts)
+  session.select(plan.project_id, {
+    artifacts = state.artifacts,
+    configuration = configuration,
+  })
+  return model.result({
+    ok = true,
+    code = process_result.code,
+    output = process_result.output or "",
+    artifacts = {},
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id, mode = "clean" },
   })
 end
 
@@ -19,123 +158,6 @@ local function adapter_for(project)
   return project.build.adapter
     or project.kind
     or (project.images[1].target and project.images[1].target.build_backend)
-end
-
-local function configurations(project, adapter)
-  if adapter == "cmake_presets" then
-    return presets.configurations(project.root)
-  end
-  if adapter == "cmake_plain" then
-    return {
-      {
-        name = "default",
-        configure_preset = "default",
-        binary_dir = project.root .. "/build",
-      },
-    }
-  end
-  if adapter == "make" then
-    return {
-      {
-        name = "default",
-        configure_preset = "default",
-        binary_dir = project.root .. "/build",
-      },
-    }
-  end
-  return nil,
-    build_error("build-backend-unknown", "unknown build backend " .. tostring(adapter))
-end
-
-local function named_configuration(available, requested)
-  if type(requested) == "table" then
-    requested = requested.name
-  end
-  if requested == nil then
-    return nil
-  end
-  for _, configuration in ipairs(available) do
-    if configuration.name == requested then
-      return configuration
-    end
-  end
-  return false
-end
-
-local function resolve_configuration(project, opts, available)
-  local state = session.get(project)
-  local requested = opts.configuration
-  if requested == nil then
-    requested = opts.preset
-  end
-  if requested == nil then
-    requested = state.configuration
-  end
-  local selected = named_configuration(available, requested)
-  if selected == false then
-    return nil,
-      build_error(
-        "configuration-not-found",
-        "unknown build configuration "
-          .. tostring(type(requested) == "table" and requested.name or requested),
-        "run :STM32SelectConfig and choose a visible configuration"
-      )
-  end
-  if selected then
-    return selected
-  end
-  if #available == 1 then
-    return available[1]
-  end
-  return nil,
-    build_error(
-      "configuration-required",
-      #available == 0 and "no visible build configurations found"
-        or "a build configuration must be selected",
-      "run :STM32SelectConfig and choose a visible configuration"
-    )
-end
-
-local function select_images(project, opts)
-  local requested = opts.images
-  if not requested and opts.image_id then
-    requested = { opts.image_id }
-  end
-  if not requested then
-    local selected = session.get(project).image_id
-    if selected then
-      requested = { selected }
-    end
-  end
-  if not requested then
-    local all = {}
-    for _, image in ipairs(project.images) do
-      all[#all + 1] = image.id
-    end
-    return all
-  end
-  if type(requested) ~= "table" then
-    return nil, build_error("image-selection-invalid", "images must be a list")
-  end
-  local known = {}
-  for _, image in ipairs(project.images) do
-    known[image.id] = true
-  end
-  local selected, seen = {}, {}
-  for _, image_id in ipairs(requested) do
-    if type(image_id) ~= "string" or image_id == "" or not known[image_id] then
-      return nil,
-        build_error("image-not-found", "unknown project image " .. tostring(image_id))
-    end
-    if not seen[image_id] then
-      selected[#selected + 1] = image_id
-      seen[image_id] = true
-    end
-  end
-  if #selected == 0 then
-    return nil, build_error("image-selection-invalid", "at least one image is required")
-  end
-  return selected
 end
 
 local function image_targets(project, selected)
@@ -154,7 +176,25 @@ local function image_targets(project, selected)
   return targets
 end
 
-local function commands_for(project, adapter, configuration, targets)
+local function clean_command(project, adapter, configuration)
+  if adapter == "cmake_presets" then
+    return presets.build_command(project, configuration, { "clean" })
+  end
+  if adapter == "cmake_plain" then
+    return model.command({
+      argv = { "cmake", "--build", "build", "--target", "clean" },
+      cwd = project.root,
+      lifecycle = "short",
+    })
+  end
+  return model.command({
+    argv = { "make", "clean" },
+    cwd = project.root,
+    lifecycle = "short",
+  })
+end
+
+local function build_commands(project, adapter, configuration, targets)
   if adapter == "cmake_presets" then
     return {
       presets.configure_command(project, configuration),
@@ -181,36 +221,49 @@ local function commands_for(project, adapter, configuration, targets)
   }
 end
 
+local function commands_for(project, adapter, configuration, targets, mode)
+  if mode == "clean" then
+    return { clean_command(project, adapter, configuration) }
+  end
+  local commands = build_commands(project, adapter, configuration, targets)
+  if mode == "rebuild" then
+    table.insert(commands, 1, clean_command(project, adapter, configuration))
+  end
+  return commands
+end
+
 function M.plan(project, opts)
   opts = vim.deepcopy(opts or {})
-  local project_ok, copied_project = pcall(model.project, project)
-  if not project_ok then
-    return nil, build_error("project-invalid", tostring(copied_project))
+  local mode = opts.mode or "build"
+  if mode ~= "build" and mode ~= "clean" and mode ~= "rebuild" then
+    return nil,
+      model.error({
+        code = "build-mode-invalid",
+        message = "nvim-stm32: unknown build lifecycle mode " .. tostring(mode),
+        operation = "build",
+        hint = "use build, clean, or rebuild",
+      })
   end
-  project = copied_project
-
+  local resolved, resolved_err = context.resolve(project, opts)
+  if not resolved then
+    return nil, resolved_err
+  end
+  project = resolved.project
+  local configuration = resolved.configuration
+  local selected = vim.tbl_map(function(image)
+    return image.id
+  end, resolved.images)
   local adapter = adapter_for(project)
-  local available, configuration_err = configurations(project, adapter)
-  if not available then
-    return nil, configuration_err
-  end
-  local configuration, selected_err = resolve_configuration(project, opts, available)
-  if not configuration then
-    return nil, selected_err
-  end
-  local selected, image_err = select_images(project, opts)
-  if not selected then
-    return nil, image_err
-  end
 
   next_plan_id = next_plan_id + 1
   local binary_dir = vim.fs.normalize(configuration.binary_dir)
   local metadata = {
     adapter = adapter,
     configuration = vim.deepcopy(configuration),
+    mode = mode,
     project = project,
   }
-  if adapter == "cmake_presets" or adapter == "cmake_plain" then
+  if mode ~= "clean" and (adapter == "cmake_presets" or adapter == "cmake_plain") then
     metadata.query_path = binary_dir
       .. "/.cmake/api/v1/query/client-nvim-stm32/query.json"
     metadata.reply_dir = binary_dir .. "/.cmake/api/v1/reply"
@@ -229,12 +282,79 @@ function M.plan(project, opts)
       project,
       adapter,
       configuration,
-      image_targets(project, selected)
+      image_targets(project, selected),
+      mode
     ),
-    locks = {},
+    locks = { context.artifact_lock(project) },
     reset_policy = "none",
     metadata = metadata,
   })
+end
+
+function M.validate(plan)
+  if type(plan.metadata) ~= "table" then
+    error("plan.metadata: expected table")
+  end
+  if type(plan.metadata.project) ~= "table" then
+    error("plan.metadata.project: expected table")
+  end
+  plan.metadata.project = model.project(plan.metadata.project)
+  if type(plan.metadata.configuration) ~= "table" then
+    error("plan.metadata.configuration: expected table")
+  end
+  plan.metadata.configuration = model.configuration(plan.metadata.configuration)
+  if plan.metadata.file_api ~= nil then
+    vim.validate("plan.metadata.file_api", plan.metadata.file_api, "table")
+    vim.validate(
+      "plan.metadata.file_api.query_path",
+      plan.metadata.file_api.query_path,
+      "string"
+    )
+    vim.validate(
+      "plan.metadata.file_api.reply_dir",
+      plan.metadata.file_api.reply_dir,
+      "string"
+    )
+  end
+end
+
+function M.preflight(plan)
+  if not plan.metadata.file_api then
+    return true
+  end
+  return file_api.write_query(plan.metadata.configuration.binary_dir)
+end
+
+function M.complete(plan, process_result)
+  if not process.succeeded(process_result) then
+    return failure(
+      plan,
+      operation_error(
+        "process-failed",
+        "build command did not complete successfully",
+        plan,
+        process_result
+      ),
+      process_result
+    )
+  end
+
+  local result, result_err
+  if plan.metadata.mode == "clean" then
+    result = successful_clean_result(plan, process_result)
+  else
+    result, result_err = successful_result(plan, process_result)
+  end
+  if not result then
+    return failure(plan, result_err, process_result)
+  end
+  session.select(plan.project_id, {
+    configuration = plan.metadata.configuration.name,
+  })
+  if plan.metadata.mode ~= "clean" then
+    session.record(plan.project_id, result)
+  end
+  return result
 end
 
 local function notify_error(err)
@@ -258,7 +378,7 @@ function M.select_configuration(opts, callback)
     vim.notify(project_err.message or tostring(project_err), vim.log.levels.WARN)
     return nil
   end
-  local available, available_err = configurations(project, adapter_for(project))
+  local available, available_err = context.configurations(project)
   if not available then
     notify_error(available_err)
     return nil

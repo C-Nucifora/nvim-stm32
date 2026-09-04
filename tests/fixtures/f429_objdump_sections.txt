@@ -1,0 +1,28 @@
+dt.elf:     file format elf32-littlearm
+
+Sections:
+Idx Name          Size      VMA       LMA       File off  Algn
+  0 .isr_vector   000001ac  08000000  08000000  00001000  2**0
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  1 .text         00004a48  080001b0  080001b0  000011b0  2**4
+                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+  2 .rodata       000000b8  08004bf8  08004bf8  00005bf8  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  3 .ARM.extab    00000000  08004cb0  08004cb0  00006068  2**0
+                  CONTENTS, READONLY
+  4 .ARM          00000008  08004cb0  08004cb0  00005cb0  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  5 .init_array   00000004  08004cb8  08004cb8  00005cb8  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  6 .fini_array   00000004  08004cbc  08004cbc  00005cbc  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  7 .data         00000068  20000000  08004cc0  00006000  2**2
+                  CONTENTS, ALLOC, LOAD, DATA
+  8 .bss          000008d4  20000068  08004d28  00006068  2**2
+                  ALLOC
+  9 ._user_heap_stack 00000604  2000093c  08004d28  0000693c  2**0
+                  ALLOC
+ 10 .ARM.attributes 00000030  00000000  00000000  00006068  2**0
+                  CONTENTS, READONLY
+ 11 .debug_info   0000edc7  00000000  00000000  000060dd  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS

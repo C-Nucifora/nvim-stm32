@@ -158,6 +158,19 @@ M.ram_kb = {
   STM32F429 = 256,
 }
 
+--- Device facts that a backend can observe during an explicit connection.
+--- Debug IDs are not unique part numbers. 0x419 identifies the shared
+--- STM32F42x/F43x debug block, so consumers compare it with this accepted list
+--- instead of treating it as an exact chip name.
+---@type table<string, table>
+M.observed_devices = {
+  STM32F429 = {
+    device = "STM32F429",
+    debug_ids = { 0x419 },
+    debug_idcode_address = 0xE0042000,
+  },
+}
+
 ---@class Stm32Parts
 ---@field mcu string
 ---@field series string
@@ -211,6 +224,7 @@ function M.resolve(mcu)
     return nil
   end
   local family = M.families[parts.series]
+  local observed = M.observed_devices[parts.device] or {}
   return {
     device = parts.device,
     family = family.family,
@@ -219,6 +233,8 @@ function M.resolve(mcu)
     openocd_cfg = family.openocd_cfg,
     flash_kb = parts.flash and M.flash_sizes[parts.flash] or nil,
     ram_kb = M.ram_kb[parts.device],
+    debug_ids = observed.debug_ids and vim.deepcopy(observed.debug_ids) or nil,
+    debug_idcode_address = observed.debug_idcode_address,
   }
 end
 

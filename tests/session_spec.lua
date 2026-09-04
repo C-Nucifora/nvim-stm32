@@ -48,6 +48,13 @@ describe("nvim-stm32 session", function()
     assert.same({}, session.get("/one").artifacts)
   end)
 
+  it("initializes monitor and probe selections explicitly", function()
+    local state = session.get("/one")
+
+    assert.is_nil(state.monitor_device)
+    assert.is_nil(state.probe_serial)
+  end)
+
   it("copies nested selections on input and output", function()
     local patch = { artifacts = { { path = "/one/app.elf" } } }
     session.select("/one", patch)

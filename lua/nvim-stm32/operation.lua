@@ -1,8 +1,6 @@
-local artifacts = require("nvim-stm32.discover.artifacts")
-local file_api = require("nvim-stm32.build.file_api")
+local locks = require("nvim-stm32.locks")
 local model = require("nvim-stm32.model")
 local process = require("nvim-stm32.process")
-local session = require("nvim-stm32.session")
 
 local M = {}
 
@@ -50,119 +48,6 @@ local function result_for_failure(plan, err, process_result)
   })
 end
 
-local function selected_project(plan)
-  local wanted = {}
-  for _, image_id in ipairs(plan.images) do
-    wanted[image_id] = true
-  end
-  local project = vim.deepcopy(plan.metadata.project)
-  project.images = vim.tbl_filter(function(image)
-    return wanted[image.id]
-  end, project.images)
-  return project
-end
-
-local function selected_reply(plan, reply)
-  local target_names = {}
-  for _, image in ipairs(selected_project(plan).images) do
-    if image.build_target then
-      target_names[image.build_target] = true
-    end
-  end
-  local targets = reply.targets or {}
-  if type(reply.configurations) == "table" then
-    local configuration_name = plan.metadata.configuration.file_api_configuration
-      or plan.metadata.configuration.name
-    if #reply.configurations == 1 then
-      targets = reply.configurations[1].targets or {}
-    else
-      targets = {}
-      for _, configuration in ipairs(reply.configurations) do
-        if configuration.name == configuration_name then
-          targets = configuration.targets or {}
-          break
-        end
-      end
-    end
-  end
-  return {
-    targets = vim.tbl_filter(function(target)
-      return vim.tbl_isempty(target_names) or target_names[target.name]
-    end, targets),
-  }
-end
-
-local function build_artifacts(plan)
-  local metadata = plan.metadata
-  local project = selected_project(plan)
-  local configuration = metadata.configuration
-  if metadata.file_api then
-    local reply, reply_err = file_api.reply(configuration.binary_dir)
-    if not reply then
-      return nil, reply_err
-    end
-    return artifacts.from_cmake(
-      project,
-      configuration,
-      selected_reply(plan, reply),
-      plan.id
-    )
-  end
-  return artifacts.from_tree(project, configuration, plan.id)
-end
-
-local function successful_result(plan, process_result)
-  local found, artifact_err = build_artifacts(plan)
-  if not found then
-    return nil, artifact_err
-  end
-  local result = model.result({
-    ok = true,
-    code = process_result.code,
-    output = process_result.output or "",
-    artifacts = found,
-    duration_ms = process_result.started_ns
-        and process_result.ended_ns
-        and (process_result.ended_ns - process_result.started_ns) / 1000000
-      or nil,
-    started_ns = process_result.started_ns,
-    finished_ns = process_result.ended_ns,
-    metadata = { operation_id = plan.id },
-  })
-  local elves = artifacts.for_image(result.artifacts, plan.images[1], "elf")
-  if #plan.images == 1 and #elves == 1 then
-    result.elf = elves[1].path
-  end
-  return model.result(result)
-end
-
-local function validate_build_plan(plan)
-  if type(plan.metadata) ~= "table" then
-    error("plan.metadata: expected table")
-  end
-  if type(plan.metadata.project) ~= "table" then
-    error("plan.metadata.project: expected table")
-  end
-  plan.metadata.project = model.project(plan.metadata.project)
-  if type(plan.metadata.configuration) ~= "table" then
-    error("plan.metadata.configuration: expected table")
-  end
-  plan.metadata.configuration = model.configuration(plan.metadata.configuration)
-  if plan.metadata.file_api ~= nil then
-    vim.validate("plan.metadata.file_api", plan.metadata.file_api, "table")
-    vim.validate(
-      "plan.metadata.file_api.query_path",
-      plan.metadata.file_api.query_path,
-      "string"
-    )
-    vim.validate(
-      "plan.metadata.file_api.reply_dir",
-      plan.metadata.file_api.reply_dir,
-      "string"
-    )
-  end
-end
-
 local function unavailable_tool(plan)
   local checked = {}
   for _, command in ipairs(plan.commands) do
@@ -171,8 +56,8 @@ local function unavailable_tool(plan)
       checked[executable] = true
       if vim.fn.executable(executable) ~= 1 then
         return operation_error(
-          "build-tool-unavailable",
-          "required build tool not found: " .. executable,
+          plan.kind .. "-tool-unavailable",
+          "required " .. plan.kind .. " tool not found: " .. executable,
           plan
         )
       end
@@ -180,27 +65,47 @@ local function unavailable_tool(plan)
   end
 end
 
-function M.run(plan, opts, callback)
+local function structured_hook_error(code, value, plan, process_result)
+  if type(value) == "table" then
+    local ok, err = pcall(model.error, value)
+    if ok then
+      return err
+    end
+  end
+  return operation_error(code, tostring(value), plan, process_result)
+end
+
+function M.execute(plan, opts, hooks, callback)
   opts = opts or {}
+  hooks = hooks or {}
   callback = callback or function() end
   local completed = false
+  local release
   local function complete(result)
     if completed then
       return
     end
     completed = true
-    callback(vim.deepcopy(result))
+    local ok, callback_err = pcall(callback, vim.deepcopy(result))
+    if release then
+      release()
+      release = nil
+    end
+    if not ok then
+      error(callback_err)
+    end
   end
 
   local valid, copied_or_err = pcall(model.plan, plan)
-  if valid and copied_or_err.kind == "build" then
-    valid, copied_or_err = pcall(function()
-      validate_build_plan(copied_or_err)
-      return copied_or_err
-    end)
-  elseif valid then
-    valid = false
-    copied_or_err = "unsupported operation kind " .. copied_or_err.kind
+  if valid and hooks.validate then
+    local hook_ok, hook_result, hook_err = pcall(hooks.validate, copied_or_err)
+    if not hook_ok then
+      valid = false
+      copied_or_err = hook_result
+    elseif hook_result == nil and hook_err ~= nil then
+      complete(result_for_failure(copied_or_err, hook_err))
+      return safe_handle(copied_or_err.id)
+    end
   end
   if not valid then
     local err = operation_error("operation-plan-invalid", tostring(copied_or_err))
@@ -215,28 +120,63 @@ function M.run(plan, opts, callback)
     return safe_handle(copied.id)
   end
 
-  if copied.metadata.file_api then
-    local query, query_err =
-      file_api.write_query(copied.metadata.configuration.binary_dir)
-    if not query then
-      complete(result_for_failure(copied, query_err))
-      return safe_handle(copied.id)
-    end
-  end
-
   local cfg = vim.tbl_deep_extend(
     "force",
     vim.deepcopy(require("nvim-stm32").get_config()),
     vim.deepcopy(opts)
   )
+
+  local lock_err
+  release, lock_err = locks.acquire(copied.id, copied.locks)
+  if not release then
+    complete(result_for_failure(copied, lock_err))
+    return safe_handle(copied.id)
+  end
+
+  if hooks.preflight then
+    local preflight_ok, preflight_result, preflight_err =
+      pcall(hooks.preflight, copied, cfg)
+    if not preflight_ok then
+      preflight_err =
+        structured_hook_error("operation-preflight-failed", preflight_result, copied)
+    elseif preflight_result == nil and preflight_err ~= nil then
+      preflight_err =
+        structured_hook_error("operation-preflight-failed", preflight_err, copied)
+    else
+      preflight_err = nil
+    end
+    if preflight_err then
+      complete(result_for_failure(copied, preflight_err))
+      return safe_handle(copied.id)
+    end
+  end
+
   local process_opts = {
-    cwd = copied.metadata.project.root,
+    cwd = copied.metadata and copied.metadata.project and copied.metadata.project.root
+      or opts.cwd,
     env = vim.tbl_extend("force", {}, opts.env or {}),
     toolchain_path = cfg.toolchain_path,
     on_output = opts.on_output,
     max_output_bytes = opts.max_output_bytes,
     timeout_ms = opts.timeout_ms,
+    streaming = opts.streaming,
   }
+  if hooks.after_command then
+    process_opts.after_command = function(command_result)
+      local ok, continue, err = pcall(hooks.after_command, copied, command_result, cfg)
+      if not ok then
+        return nil,
+          structured_hook_error(
+            "operation-continuation-failed",
+            continue,
+            copied,
+            { command = command_result.argv, output = command_result.output }
+          )
+      end
+      return continue, err
+    end
+  end
+
   local started, handle_or_err = pcall(
     process.run,
     copied.commands,
@@ -245,27 +185,29 @@ function M.run(plan, opts, callback)
       if completed then
         return
       end
-      if process_result.code ~= 0 then
-        local err = operation_error(
-          "process-failed",
-          "build command failed with exit code " .. tostring(process_result.code),
+      if process_result.error then
+        complete(result_for_failure(copied, process_result.error, process_result))
+        return
+      end
+      local hook_ok, result, result_err =
+        pcall(hooks.complete, copied, process_result, cfg)
+      if not hook_ok then
+        result_err = structured_hook_error(
+          "operation-completion-failed",
+          result,
           copied,
           process_result
         )
-        complete(result_for_failure(copied, err, process_result))
-        return
+        result = nil
+      elseif not result then
+        result_err = structured_hook_error(
+          "operation-completion-failed",
+          result_err or "operation completion failed",
+          copied,
+          process_result
+        )
       end
-
-      local result, result_err = successful_result(copied, process_result)
-      if not result then
-        complete(result_for_failure(copied, result_err, process_result))
-        return
-      end
-      session.select(copied.project_id, {
-        configuration = copied.metadata.configuration.name,
-      })
-      session.record(copied.project_id, result)
-      complete(result)
+      complete(result or result_for_failure(copied, result_err, process_result))
     end
   )
   if not started then
@@ -274,6 +216,48 @@ function M.run(plan, opts, callback)
     return safe_handle(copied.id)
   end
   return handle_or_err or safe_handle(copied.id)
+end
+
+local function analyze_hooks()
+  local analyze = require("nvim-stm32.operations.analyze")
+  return {
+    validate = function(plan)
+      if type(plan.metadata) ~= "table" then
+        error("plan.metadata: expected table")
+      end
+      if type(plan.metadata.inputs) ~= "table" then
+        error("plan.metadata.inputs: expected table")
+      end
+    end,
+    preflight = analyze.preflight,
+    complete = analyze.complete,
+  }
+end
+
+function M.run(plan, opts, callback)
+  local hooks
+  if type(plan) == "table" and plan.kind == "build" then
+    local build = require("nvim-stm32.operations.build")
+    hooks = {
+      validate = build.validate,
+      preflight = build.preflight,
+      complete = build.complete,
+    }
+  elseif type(plan) == "table" and plan.kind == "analyze" then
+    hooks = analyze_hooks()
+  elseif type(plan) == "table" and plan.kind == "monitor" then
+    local monitor = require("nvim-stm32.operations.monitor")
+    hooks = monitor.hooks()
+    opts = vim.tbl_extend("force", vim.deepcopy(opts or {}), { streaming = true })
+  else
+    hooks = {
+      validate = function(copied)
+        error("unsupported operation kind " .. copied.kind)
+      end,
+      complete = function() end,
+    }
+  end
+  return M.execute(plan, opts, hooks, callback)
 end
 
 return M
