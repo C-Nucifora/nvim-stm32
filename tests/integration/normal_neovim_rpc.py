@@ -106,37 +106,55 @@ def rpc(nvim, socket_path, expression, timeout=30):
     )
 
 
+def process_exited_without_reaping(process):
+    flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    try:
+        status = os.waitid(os.P_PID, process.pid, flags)
+    except ChildProcessError as error:
+        raise RuntimeError("Neovim leader was reaped before process-group cleanup") from error
+    return status is not None and status.si_pid == process.pid
+
+
+def wait_for_exit_without_reaping(process, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process_exited_without_reaping(process):
+            return True
+        time.sleep(0.02)
+    return process_exited_without_reaping(process)
+
+
 def cleanup_owned_process_group(process, group_id, timeout=3):
     if process is None or group_id is None or process.pid != group_id:
         raise ValueError("refusing to clean a process group not owned by this runner")
 
     try:
         os.killpg(group_id, signal.SIGTERM)
-    except ProcessLookupError:
+    except (PermissionError, ProcessLookupError):
         return
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        process.poll()
-        try:
-            os.killpg(group_id, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.02)
+    if timeout > 0:
+        wait_for_exit_without_reaping(process, timeout)
 
     try:
         os.killpg(group_id, signal.SIGKILL)
-    except ProcessLookupError:
+    except (PermissionError, ProcessLookupError):
         return
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        process.poll()
+
+def finalize_owned_process(nvim, socket_path, process, group_id, timeout=3):
+    if not process_exited_without_reaping(process):
         try:
-            os.killpg(group_id, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.02)
+            rpc(nvim, socket_path, "execute('qa!')", timeout=timeout)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        wait_for_exit_without_reaping(process, timeout)
+
+    cleanup_owned_process_group(process, group_id, timeout)
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def main():
@@ -210,7 +228,11 @@ def main():
         reader.start()
 
         deadline = time.monotonic() + 5
-        while not socket_path.exists() and process.poll() is None and time.monotonic() < deadline:
+        while (
+            not socket_path.exists()
+            and not process_exited_without_reaping(process)
+            and time.monotonic() < deadline
+        ):
             time.sleep(0.02)
         if not socket_path.exists():
             detail = terminal_output.decode("utf-8", errors="replace")
@@ -249,20 +271,7 @@ def main():
         return 1
     finally:
         if process is not None:
-            if process.poll() is None:
-                try:
-                    rpc(nvim, socket_path, "execute('qa!')", timeout=3)
-                except (OSError, subprocess.SubprocessError):
-                    pass
-                try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    pass
-            cleanup_owned_process_group(process, owned_group_id, 3)
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                pass
+            finalize_owned_process(nvim, socket_path, process, owned_group_id, 3)
         for fd in (
             terminal_master,
             terminal_slave,
