@@ -55,18 +55,30 @@ describe("nvim-stm32 corpus validation", function()
   end)
 
   it("rejects an unexpected image count even when every MCU is F429", function()
-    assert.is_false(runner.is_f429({
+    local valid, err = runner.is_f429({
       images = {
         { id = "application", target = { mcu = "STM32F429ZITx" } },
         { id = "other", target = { mcu = "STM32F429xx" } },
       },
-    }))
+    })
+
+    assert.is_false(valid)
+    assert.equals(
+      "project must resolve exactly one application image with MCU STM32F429ZITx or STM32F429xx",
+      err
+    )
   end)
 
   it("requires the single image to be named application", function()
-    assert.is_false(runner.is_f429({
+    local valid, err = runner.is_f429({
       images = { { id = "CM4", target = { mcu = "STM32F429ZITx" } } },
-    }))
+    })
+
+    assert.is_false(valid)
+    assert.equals(
+      "project must resolve exactly one application image with MCU STM32F429ZITx or STM32F429xx",
+      err
+    )
   end)
 
   it("requires a fresh application ELF from the current build result", function()
@@ -116,7 +128,7 @@ describe("nvim-stm32 corpus validation", function()
   it("aborts traversal when cancellation never reaches a terminal state", function()
     local events = {}
     local state = "running"
-    local roots = { "/one", "/two" }
+    local roots = { "/one", "/two", "/three" }
     local entries = vim.tbl_map(function(root)
       return { root = root, resolved = { project = { root = root } } }
     end, roots)
@@ -146,9 +158,42 @@ describe("nvim-stm32 corpus validation", function()
 
     assert.is_false(terminal)
     assert.same({ "run /one", "cancel /one" }, events)
-    assert.equals(1, #results)
-    assert.is_false(results[1].ok)
-    assert.matches("did not reach a terminal state", results[1].error, 1, true)
+    assert.same(
+      { "/one", "/two", "/three" },
+      vim.tbl_map(function(result)
+        return result.root
+      end, results)
+    )
+    assert.equals(3, #results)
+    assert.same(
+      { false, false, false },
+      vim.tbl_map(function(result)
+        return result.ok
+      end, results)
+    )
+    assert.equals(
+      "Debug build did not reach a terminal state after cancellation",
+      results[1].error
+    )
+    assert.equals(
+      "project /two not run after corpus validation aborted at /one",
+      results[2].error
+    )
+    assert.equals(
+      "project /three not run after corpus validation aborted at /one",
+      results[3].error
+    )
+    assert.not_equals(results[1].error, results[2].error)
+    assert.not_equals(results[2].error, results[3].error)
+
+    local code, lines = runner.summary(results)
+    assert.equals(1, code)
+    assert.same({
+      "FAIL /one: Debug build did not reach a terminal state after cancellation",
+      "FAIL /two: project /two not run after corpus validation aborted at /one",
+      "FAIL /three: project /three not run after corpus validation aborted at /one",
+      "0/3 projects passed",
+    }, lines)
   end)
 
   it("starts the next build only after cancellation becomes terminal", function()

@@ -7,6 +7,8 @@ local M = {}
 local USAGE = "usage: scripts/validate-corpus.sh CORPUS_ROOT [--build]"
 local BUILD_TIMEOUT_MS = 300000
 local CALLBACK_GRACE_MS = 2000
+local F429_REQUIREMENT =
+  "project must resolve exactly one application image with MCU STM32F429ZITx or STM32F429xx"
 
 local source_extensions = {
   c = true,
@@ -128,7 +130,7 @@ function M.is_f429(project)
     or #project.images ~= 1
     or project.images[1].id ~= "application"
   then
-    return false
+    return false, F429_REQUIREMENT
   end
   for _, image in ipairs(project.images) do
     local mcu = image.target and image.target.mcu
@@ -139,7 +141,7 @@ function M.is_f429(project)
       or parsed.device ~= "STM32F429"
       or (normalized ~= "STM32F429ZITX" and normalized ~= "STM32F429XX")
     then
-      return false
+      return false, F429_REQUIREMENT
     end
   end
   return true
@@ -248,8 +250,9 @@ local function resolve(root)
         root
       )
   end
-  if not M.is_f429(project) then
-    return nil, "resolved MCU is not STM32F429ZITx or STM32F429xx"
+  local valid, validation_err = M.is_f429(project)
+  if not valid then
+    return nil, validation_err
   end
   local available, available_err = configurations(project)
   if not available then
@@ -310,7 +313,7 @@ function M.build_projects(entries, opts)
     grace_ms = opts.grace_ms or CALLBACK_GRACE_MS,
   }
   local results = {}
-  for _, entry in ipairs(entries) do
+  for index, entry in ipairs(entries) do
     if not entry.resolved then
       results[#results + 1] = {
         root = entry.root,
@@ -325,6 +328,18 @@ function M.build_projects(entries, opts)
         error = build_err,
       }
       if terminal == false then
+        for remaining = index + 1, #entries do
+          local skipped = entries[remaining]
+          results[#results + 1] = {
+            root = skipped.root,
+            ok = false,
+            error = string.format(
+              "project %s not run after corpus validation aborted at %s",
+              skipped.root,
+              entry.root
+            ),
+          }
+        end
         return results, false
       end
     end
