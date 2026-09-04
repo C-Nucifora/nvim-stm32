@@ -86,13 +86,62 @@ local function collect_groups(found)
   return order, candidates
 end
 
+local function same_device(left, right)
+  return targets.parse(left[1].mcu).device == targets.parse(right[1].mcu).device
+end
+
+local function compatible_core(left, right)
+  return not left[1].core or not right[1].core or left[1].core == right[1].core
+end
+
+local function merge_compatible_unhinted_groups(groups)
+  local merged = {}
+  for _, group in ipairs(groups) do
+    if group[1].image_hint then
+      merged[#merged + 1] = group
+    else
+      local matches = {}
+      for _, hinted in ipairs(groups) do
+        if
+          hinted[1].image_hint
+          and same_device(group, hinted)
+          and compatible_core(group, hinted)
+        then
+          matches[#matches + 1] = hinted
+        end
+      end
+      if #matches == 1 then
+        vim.list_extend(matches[1], group)
+      else
+        merged[#merged + 1] = group
+      end
+    end
+  end
+  return merged
+end
+
+local function ambiguous_groups(groups)
+  local unhinted, hinted = 0, 0
+  for _, group in ipairs(groups) do
+    if group[1].image_hint then
+      hinted = hinted + 1
+    else
+      unhinted = unhinted + 1
+      if #group > 1 then
+        return true
+      end
+    end
+  end
+  return unhinted > 1 or (unhinted > 0 and hinted > 0)
+end
+
 local function group_id(group, count, index)
+  if count == 1 then
+    return "application"
+  end
   local hint = group[1].image_hint
   if hint == "CM4" or hint == "CM7" then
     return hint
-  end
-  if count == 1 then
-    return "application"
   end
   return "image_" .. index
 end
@@ -119,6 +168,7 @@ function M.resolve(dir)
 
   local found = signals.collect(project_root)
   local groups, candidates = collect_groups(found)
+  groups = merge_compatible_unhinted_groups(groups)
   if #groups == 0 then
     groups = { { { mcu = nil, confidence = "unknown", image_hint = nil } } }
     candidates = {}
@@ -127,15 +177,7 @@ function M.resolve(dir)
   table.sort(groups, function(a, b)
     return group_id(a, #groups, 1) < group_id(b, #groups, 2)
   end)
-  local unhinted, hinted = 0, 0
-  for _, signal in ipairs(candidates) do
-    if signal.image_hint then
-      hinted = hinted + 1
-    else
-      unhinted = unhinted + 1
-    end
-  end
-  local ambiguous = unhinted > 1 or (unhinted > 0 and hinted > 0)
+  local ambiguous = ambiguous_groups(groups)
   local _, measured_core, measured_fpu = nil, nil, nil
   if #groups == 1 and not ambiguous then
     _, measured_core, measured_fpu = signals.scan_cmake(project_root)
