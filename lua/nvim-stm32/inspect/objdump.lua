@@ -140,7 +140,7 @@ function M.report(sections, regions)
           item.counted = true
         end
       end
-      if flags.LOAD then
+      if flags.ALLOC and flags.LOAD then
         local region_index, region, region_err =
           assigned_region(regions, item, item.lma, "load")
         if region_err then

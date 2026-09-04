@@ -98,6 +98,26 @@ describe("nvim-stm32 GNU objdump section parsing", function()
     assert.is_false(report.sections[13].counted)
   end)
 
+  it("keeps a non-allocated loaded section out of flash totals", function()
+    local report = assert(objdump.report({
+      {
+        index = 0,
+        name = ".metadata",
+        size = 0x20,
+        vma = 0,
+        lma = 0x08000000,
+        file_offset = 0x1000,
+        alignment = 4,
+        flags = { "CONTENTS", "LOAD", "READONLY" },
+      },
+    }, regions))
+
+    assert.equals(0, report.totals.flash)
+    assert.equals(0, report.totals.ram)
+    assert.equals(".metadata", report.sections[1].name)
+    assert.is_false(report.sections[1].counted)
+  end)
+
   it("rejects a section that extends beyond its matched region", function()
     local report, err = objdump.report({
       {
