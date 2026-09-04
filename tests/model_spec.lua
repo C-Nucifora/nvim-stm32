@@ -127,4 +127,42 @@ describe("model records", function()
       })
     end)
   end)
+
+  it("rejects sparse and keyed argv lists", function()
+    assert.has_error(function()
+      model.command({ argv = { [1] = "cmake", [3] = "--build" } })
+    end)
+    assert.has_error(function()
+      model.command({ argv = { "cmake", "--build", extra = "unexpected" } })
+    end)
+  end)
+
+  it("validates every command in a plan", function()
+    assert.has_error(function()
+      model.plan({
+        id = "op-1",
+        kind = "build",
+        project_id = "/fw",
+        images = { "app" },
+        commands = { { argv = {} } },
+        locks = {},
+        reset_policy = "none",
+      })
+    end)
+  end)
+
+  it("validates every artifact and error in a result", function()
+    assert.has_error(function()
+      model.result({ ok = true, code = 0, output = "", artifacts = { {} } })
+    end)
+    assert.has_error(function()
+      model.result({
+        ok = false,
+        code = 1,
+        output = "failed",
+        artifacts = {},
+        error = {},
+      })
+    end)
+  end)
 end)

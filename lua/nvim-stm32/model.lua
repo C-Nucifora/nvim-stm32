@@ -16,11 +16,23 @@ end
 
 local function list(name, value, predicate, message, non_empty)
   vim.validate(name, value, function(v)
-    if type(v) ~= "table" or (non_empty and #v == 0) then
+    if type(v) ~= "table" then
       return false
     end
-    for i, item in ipairs(v) do
-      if not predicate(item, i) then
+    local count = 0
+    local maximum = 0
+    for key in pairs(v) do
+      if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+        return false
+      end
+      count = count + 1
+      maximum = math.max(maximum, key)
+    end
+    if (non_empty and count == 0) or maximum ~= count then
+      return false
+    end
+    for index = 1, count do
+      if not predicate(v[index], index) then
         return false
       end
     end
@@ -138,6 +150,9 @@ function M.plan(spec)
   list("plan.commands", out.commands, function(item)
     return type(item) == "table" and type(item.argv) == "table"
   end, "a list of commands")
+  for index, command in ipairs(out.commands) do
+    out.commands[index] = M.command(command)
+  end
   vim.validate("plan.locks", out.locks, "table")
   required_string("plan.reset_policy", out.reset_policy)
   return out
@@ -153,6 +168,15 @@ function M.result(spec)
   vim.validate("result.output", out.output, "string")
   vim.validate("result.artifacts", out.artifacts, "table")
   vim.validate("result.error", out.error, "table", true)
+  list("result.artifacts", out.artifacts, function(item)
+    return type(item) == "table"
+  end, "a list of artifacts")
+  for index, artifact in ipairs(out.artifacts) do
+    out.artifacts[index] = M.artifact(artifact)
+  end
+  if out.error then
+    out.error = M.error(out.error)
+  end
   vim.validate("result.duration_ms", out.duration_ms, "number", true)
   vim.validate("result.started_ns", out.started_ns, "number", true)
   vim.validate("result.finished_ns", out.finished_ns, "number", true)
