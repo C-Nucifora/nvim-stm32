@@ -17,21 +17,37 @@ corpus_root=$(CDPATH='' cd -- "$1" && pwd)
 discovery_log=$(mktemp "${TMPDIR:-/tmp}/nvim-stm32-discovery.XXXXXX")
 build_log=$(mktemp "${TMPDIR:-/tmp}/nvim-stm32-build.XXXXXX")
 # shellcheck disable=SC2329
-cleanup() {
+cleanup_exit() {
   cleanup_code=$?
   trap - EXIT HUP INT TERM
   rm -f "$discovery_log" "$build_log"
   exit "$cleanup_code"
 }
-trap cleanup EXIT HUP INT TERM
+# shellcheck disable=SC2329
+cleanup_signal() {
+  cleanup_code=$1
+  trap - EXIT HUP INT TERM
+  rm -f "$discovery_log" "$build_log"
+  exit "$cleanup_code"
+}
+trap cleanup_exit EXIT
+trap 'cleanup_signal 129' HUP
+trap 'cleanup_signal 130' INT
+trap 'cleanup_signal 143' TERM
 
 cd "$repo_dir"
 scripts/test.sh
 stylua --check lua/ tests/
 
-scripts/validate-corpus.sh "$corpus_root" > "$discovery_log" 2>&1
+discovery_status=0
+scripts/validate-corpus.sh "$corpus_root" > "$discovery_log" 2>&1 \
+  || discovery_status=$?
 cat "$discovery_log"
 printf '\n'
+if [ "$discovery_status" -ne 0 ]; then
+  echo "F429 discovery gate failed with status $discovery_status." >&2
+  exit 1
+fi
 if ! grep -Fxq '13/13 projects passed' "$discovery_log"; then
   echo 'F429 discovery gate expected exactly 13/13 projects' >&2
   exit 1

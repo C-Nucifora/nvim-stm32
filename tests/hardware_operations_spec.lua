@@ -279,6 +279,14 @@ describe("nvim-stm32 alternative fake backend integration", function()
       { "stlink:identify", "stlink:program-verify", "stlink:reset" },
       events(root)
     )
+    assert.same({
+      stlink,
+      "--serial",
+      "0xFAKEF429001",
+      "write",
+      vim.fn.resolve(bin.path),
+      "0x08000000",
+    }, argv_logs(root)[2])
   end)
 
   it("programs and verifies an ELF with the pinned OpenOCD tool", function()
@@ -290,7 +298,7 @@ describe("nvim-stm32 alternative fake backend integration", function()
       backend = "openocd",
       openocd_path = openocd,
       configuration = "Debug",
-      probe = { backend = "openocd", serial = "FAKE-F429-001" },
+      probe = { backend = "openocd", serial = "[FAKE-F429-001]" },
       artifacts = { elf },
       build_id = "fake-build-1",
     }, { env = fake_env(root) })
@@ -300,6 +308,17 @@ describe("nvim-stm32 alternative fake backend integration", function()
       { "openocd:identify", "openocd:program-verify", "openocd:reset" },
       events(root)
     )
+    assert.same({
+      openocd,
+      "-f",
+      "interface/stlink.cfg",
+      "-c",
+      "adapter serial {[FAKE-F429-001]}",
+      "-f",
+      "target/stm32f4x.cfg",
+      "-c",
+      "program " .. vim.fn.resolve(elf.path) .. " verify; shutdown",
+    }, argv_logs(root)[2])
   end)
 end)
 
@@ -382,25 +401,58 @@ describe("nvim-stm32 fake UART integration", function()
     assert.is_false(result.ok)
     assert.equals("monitor-stopped", result.error.code)
     assert.same({ "uart:setup", "uart:stream" }, events(root))
+    assert.same({
+      root .. "/tools/stty",
+      "-F",
+      device,
+      "115200",
+      "raw",
+      "-echo",
+      "cs8",
+      "-parenb",
+      "-cstopb",
+      "clocal",
+    }, argv_logs(root)[1])
+    assert.same({ root .. "/tools/cat", device }, argv_logs(root)[2])
   end)
 end)
 
+local function real_pty_prerequisites()
+  local commands = {}
+  for _, name in ipairs({ "python3", "stty", "cat" }) do
+    local path = vim.fn.exepath(name)
+    if path == "" then
+      return nil,
+        "nvim-stm32 real PTY UART integration skipped: " .. name .. " is unavailable"
+    end
+    commands[name] = path
+  end
+
+  local result = vim
+    .system({
+      commands.python3,
+      "-c",
+      "import os, pty; master, slave = pty.openpty(); os.close(slave); os.close(master)",
+    }, { text = true })
+    :wait()
+  if result.code ~= 0 then
+    local detail = vim.trim((result.stderr or "") .. (result.stdout or ""))
+    return nil,
+      "nvim-stm32 real PTY UART integration skipped: Python stdlib pty.openpty() is unavailable"
+        .. (detail ~= "" and ": " .. detail or "")
+  end
+  return commands
+end
+
+local pty_commands
+local pty_skip_reason
 if vim.env.NVIM_STM32_REAL_PTY == "1" then
+  pty_commands, pty_skip_reason = real_pty_prerequisites()
+end
+
+if pty_commands then
   describe("nvim-stm32 real PTY UART integration", function()
     it("streams through real stty and cat, cancels, and reopens the device", function()
-      local python = vim.fn.exepath("python3")
-      assert.is_not.equals("", python, "python3 is required for the opt-in PTY test")
-      assert.is_not.equals(
-        "",
-        vim.fn.exepath("stty"),
-        "stty is required for the opt-in PTY test"
-      )
-      assert.is_not.equals(
-        "",
-        vim.fn.exepath("cat"),
-        "cat is required for the opt-in PTY test"
-      )
-
       local root = vim.fn.tempname()
       vim.fn.mkdir(root, "p")
       local slave_file = root .. "/slave"
@@ -408,7 +460,7 @@ if vim.env.NVIM_STM32_REAL_PTY == "1" then
       local stop_file = root .. "/stop"
       local helper_result
       local helper = vim.system({
-        python,
+        pty_commands.python3,
         "-c",
         [[
 import os
@@ -439,6 +491,21 @@ os.close(master)
       local second_handle
       local first_result
       local second_result
+      local function terminal(handle)
+        return not handle
+          or handle.state() == "completed"
+          or handle.state() == "cancelled"
+      end
+
+      local function cancel_and_wait(handle)
+        if handle and not terminal(handle) then
+          pcall(handle.cancel, "test-cleanup")
+        end
+        return vim.wait(3000, function()
+          return terminal(handle)
+        end)
+      end
+
       local ok, err = pcall(function()
         assert.is_true(
           vim.wait(3000, function()
@@ -502,43 +569,85 @@ os.close(master)
         assert.equals("monitor-stopped", second_result.error.code)
       end)
 
-      if
-        first_handle
-        and first_handle.state() ~= "completed"
-        and first_handle.state() ~= "cancelled"
-      then
-        first_handle.cancel("test-cleanup")
-      end
-      if
-        second_handle
-        and second_handle.state() ~= "completed"
-        and second_handle.state() ~= "cancelled"
-      then
-        second_handle.cancel("test-cleanup")
-      end
+      local first_stopped = cancel_and_wait(first_handle)
+      local second_stopped = cancel_and_wait(second_handle)
       write(stop_file, "stop")
-      if
-        not vim.wait(3000, function()
-          return helper_result ~= nil
-        end)
-      then
+      local helper_stopped = vim.wait(3000, function()
+        return helper_result ~= nil
+      end)
+      if not helper_stopped then
         helper:kill(15)
-        vim.wait(3000, function()
+        helper_stopped = vim.wait(3000, function()
           return helper_result ~= nil
         end)
       end
-      vim.fn.delete(root, "rf")
+      if first_stopped and second_stopped and helper_stopped then
+        vim.fn.delete(root, "rf")
+      end
+      assert.is_true(first_stopped, "first PTY monitor did not reach a terminal state")
+      assert.is_true(
+        second_stopped,
+        "second PTY monitor did not reach a terminal state"
+      )
+      assert.is_true(helper_stopped, "Python PTY helper did not reach a terminal state")
       assert.is_true(ok, err)
       assert.equals(0, helper_result.code, helper_result.stderr)
     end)
   end)
 else
   pending(
-    "nvim-stm32 real PTY UART integration: set NVIM_STM32_REAL_PTY=1 to run the Python stdlib PTY smoke test"
+    pty_skip_reason
+      or "nvim-stm32 real PTY UART integration: set NVIM_STM32_REAL_PTY=1 to run the Python stdlib PTY smoke test"
   )
 end
 
 describe("nvim-stm32 F429 software acceptance entry point", function()
+  local root
+  local corpus
+  local wrapper
+  local fixture_path
+
+  local function executable(path, lines)
+    write(path, lines)
+    assert.is_true(vim.uv.fs_chmod(path, 493))
+  end
+
+  before_each(function()
+    root = vim.fn.tempname()
+    corpus = root .. "/corpus"
+    wrapper = root .. "/scripts/validate-f429-software.sh"
+    fixture_path = root .. "/bin:" .. vim.env.PATH
+    vim.fn.mkdir(corpus, "p")
+    vim.fn.mkdir(root .. "/scripts", "p")
+    vim.fn.mkdir(root .. "/bin", "p")
+    assert.is_true(
+      vim.uv.fs_copyfile(repo .. "/scripts/validate-f429-software.sh", wrapper)
+    )
+    assert.is_true(vim.uv.fs_chmod(wrapper, 493))
+    executable(root .. "/scripts/test.sh", {
+      "#!/bin/sh",
+      "set -eu",
+      'if [ "${NVIM_STM32_TEST_SIGNAL_TERM:-}" = 1 ]; then',
+      '  kill -TERM "$PPID"',
+      "fi",
+    })
+    executable(root .. "/bin/stylua", { "#!/bin/sh", "exit 0" })
+    executable(root .. "/scripts/validate-corpus.sh", {
+      "#!/bin/sh",
+      "set -eu",
+      'if [ "${2:-}" = --build ]; then',
+      "  echo '13/13 projects passed'",
+      "  exit 0",
+      "fi",
+      "printf '%s\\n' \"${NVIM_STM32_TEST_DISCOVERY_OUTPUT:-13/13 projects passed}\"",
+      'exit "${NVIM_STM32_TEST_DISCOVERY_STATUS:-0}"',
+    })
+  end)
+
+  after_each(function()
+    vim.fn.delete(root, "rf")
+  end)
+
   it("is valid POSIX shell", function()
     local result = vim
       .system({
@@ -575,5 +684,52 @@ describe("nvim-stm32 F429 software acceptance entry point", function()
 
     assert.equals(2, result.code)
     assert.matches("corpus root is not a directory", result.stderr, 1, true)
+  end)
+
+  it("prints discovery diagnostics before its custom nonzero-status failure", function()
+    local result = vim
+      .system({ wrapper, corpus }, {
+        text = true,
+        env = {
+          PATH = fixture_path,
+          NVIM_STM32_TEST_DISCOVERY_OUTPUT = "controlled discovery failure",
+          NVIM_STM32_TEST_DISCOVERY_STATUS = "7",
+        },
+      })
+      :wait()
+
+    assert.equals(1, result.code)
+    assert.matches("controlled discovery failure", result.stdout, 1, true)
+    assert.matches("F429 discovery gate failed with status 7", result.stderr, 1, true)
+  end)
+
+  it("prints discovery diagnostics before its wrong-summary failure", function()
+    local result = vim
+      .system({ wrapper, corpus }, {
+        text = true,
+        env = {
+          PATH = fixture_path,
+          NVIM_STM32_TEST_DISCOVERY_OUTPUT = "12/13 projects passed",
+        },
+      })
+      :wait()
+
+    assert.equals(1, result.code)
+    assert.matches("12/13 projects passed", result.stdout, 1, true)
+    assert.matches("expected exactly 13/13 projects", result.stderr, 1, true)
+  end)
+
+  it("returns the conventional nonzero status when TERM interrupts it", function()
+    local result = vim
+      .system({ wrapper, corpus }, {
+        text = true,
+        env = {
+          PATH = fixture_path,
+          NVIM_STM32_TEST_SIGNAL_TERM = "1",
+        },
+      })
+      :wait()
+
+    assert.equals(143, result.code, vim.inspect(result))
   end)
 end)

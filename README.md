@@ -99,7 +99,8 @@ an ELF with a glob or reuse an unrelated build.
 - `:STM32Flash` builds the selected configuration, checks the connected target,
   programs and verifies every image in project order, then performs one reset.
 - `:STM32Erase` asks for confirmation immediately before it identifies the
-  target and issues a mass erase. Declining starts no process.
+  target and issues a mass erase. Declining starts no process. This repeated
+  confirmation is behavior of the `:STM32Erase` UI command.
 - `:STM32Reset` identifies the selected target and resets it.
 - `:STM32Monitor` configures and streams the selected UART device. Closing its
   output window cancels only the monitor process owned by that operation.
@@ -124,9 +125,10 @@ Before any hardware-changing command, the plugin validates the project, chosen
 configuration, selected probe, target identity policy, artifact freshness, and
 flash layout. A target mismatch stops before programming unless the direct API
 invocation explicitly allows that one plan. Multi-image flashes retain project
-order and reset once, after all images verify. Mass erase always requires a new
-confirmation. Cancellation signals only the child process started by the
-plugin and releases its probe or serial-device lock after that child exits.
+order and reset once, after all images verify. Direct API callers must create a
+newly confirmed plan immediately before every erase. Cancellation signals only
+the child process started by the plugin and releases its probe or serial-device
+lock after that child exits.
 
 ## Software-only validation
 
