@@ -163,6 +163,41 @@ describe("nvim-stm32 ELF discovery", function()
 
     assert.equals(elf, build.find_elf({ root = root, build_backend = "make" }, {}))
   end)
+
+  it("restricts the session artifact view to the selected configuration", function()
+    local debug_elf = root .. "/artifacts/Debug/app.elf"
+    local release_elf = root .. "/artifacts/Release/app.elf"
+    vim.fn.mkdir(vim.fs.dirname(debug_elf), "p")
+    vim.fn.mkdir(vim.fs.dirname(release_elf), "p")
+    vim.fn.writefile({ "debug" }, debug_elf)
+    vim.fn.writefile({ "release" }, release_elf)
+    session.select(root, { image_id = "application", configuration = "Debug" })
+    session.record(root, {
+      artifacts = {
+        {
+          image_id = "application",
+          kind = "elf",
+          path = debug_elf,
+          configuration = "Debug",
+          build_target = "app",
+          modified_ns = 1,
+        },
+        {
+          image_id = "application",
+          kind = "elf",
+          path = release_elf,
+          configuration = "Release",
+          build_target = "app",
+          modified_ns = 2,
+        },
+      },
+    })
+
+    assert.equals(
+      debug_elf,
+      build.find_elf({ root = root, build_backend = "make" }, {})
+    )
+  end)
 end)
 
 describe("nvim-stm32 build execution", function()

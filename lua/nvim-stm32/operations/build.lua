@@ -102,6 +102,12 @@ local function select_images(project, opts)
     requested = { opts.image_id }
   end
   if not requested then
+    local selected = session.get(project).image_id
+    if selected then
+      requested = { selected }
+    end
+  end
+  if not requested then
     local all = {}
     for _, image in ipairs(project.images) do
       all[#all + 1] = image.id

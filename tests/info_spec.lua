@@ -95,6 +95,38 @@ describe("nvim-stm32.ui.info.lines", function()
     assert.matches("Configuration: Debug", text, 1, true)
     assert.matches("cm4.elf", text, 1, true)
   end)
+
+  it("keeps detailed target evidence in the project report", function()
+    local image_target = target()
+    local project = {
+      id = "/w/s5/dt",
+      root = "/w/s5/dt",
+      kind = "cmake_presets",
+      build = {
+        adapter = "cmake_presets",
+        marker = "/w/s5/dt/CMakePresets.json",
+      },
+      images = { { id = "application", target = image_target } },
+    }
+    local text = table.concat(
+      info.lines(project, {
+        configuration = "Debug",
+        artifacts = {},
+      }),
+      "\n"
+    )
+
+    assert.matches("Board:   NUCLEO-F429ZI", text, 1, true)
+    assert.matches("Marker: CMakePresets.json", text, 1, true)
+    assert.matches("application: STM32F429ZITx (STM32F4, exact)", text, 1, true)
+    assert.matches("Core:    cortex-m4 with fpv4-sp-d16", text, 1, true)
+    assert.matches("Memory:  2048 KiB flash, 256 KiB RAM", text, 1, true)
+    assert.matches("OpenOCD: target/stm32f4x.cfg", text, 1, true)
+    assert.matches("Signals: 2 of 2 agree", text, 1, true)
+    assert.matches("dt.ioc", text, 1, true)
+    local _, projects = text:gsub("Project:", "")
+    assert.equals(1, projects)
+  end)
 end)
 
 describe(":STM32Info", function()

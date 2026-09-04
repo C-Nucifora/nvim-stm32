@@ -168,6 +168,54 @@ describe("nvim-stm32 build operation plans", function()
     assert.equals(2, #plan.commands)
   end)
 
+  it("uses the session-selected image when options do not select one", function()
+    local multi = project(root, {
+      { id = "CM4", name = "CM4", build_target = "app_cm4", target = {} },
+      { id = "CM7", name = "CM7", build_target = "app_cm7", target = {} },
+    })
+    session.select(root, { image_id = "CM7" })
+
+    local plan = assert(build.plan(multi, { configuration = "Debug" }))
+
+    assert.same({ "CM7" }, plan.images)
+    assert.same({
+      "cmake",
+      "--build",
+      "--preset",
+      "Debug",
+      "--target",
+      "app_cm7",
+    }, plan.commands[2].argv)
+  end)
+
+  it("uses explicit image options before the session selection", function()
+    local multi = project(root, {
+      { id = "CM4", name = "CM4", build_target = "app_cm4", target = {} },
+      { id = "CM7", name = "CM7", build_target = "app_cm7", target = {} },
+    })
+    session.select(root, { image_id = "CM7" })
+
+    local plan = assert(build.plan(multi, {
+      configuration = "Debug",
+      image_id = "CM4",
+    }))
+
+    assert.same({ "CM4" }, plan.images)
+  end)
+
+  it("rejects an unknown session-selected image", function()
+    local multi = project(root, {
+      { id = "CM4", name = "CM4", build_target = "app_cm4", target = {} },
+      { id = "CM7", name = "CM7", build_target = "app_cm7", target = {} },
+    })
+    session.select(root, { image_id = "missing" })
+
+    local plan, err = build.plan(multi, { configuration = "Debug" })
+
+    assert.is_nil(plan)
+    assert.equals("image-not-found", err.code)
+  end)
+
   it("deep-copies the project and options used to create a plan", function()
     local source = project(root)
     local images = { "application" }
@@ -187,6 +235,8 @@ end)
 describe("nvim-stm32 operation execution", function()
   local root
   local original_process_run
+  local original_process_system
+  local original_executable
 
   before_each(function()
     root = vim.fn.tempname()
@@ -194,10 +244,14 @@ describe("nvim-stm32 operation execution", function()
     preset_document(root, { "Debug" })
     session.clear()
     original_process_run = process.run
+    original_process_system = process.system
+    original_executable = vim.fn.executable
   end)
 
   after_each(function()
     process.run = original_process_run
+    process.system = original_process_system
+    vim.fn.executable = original_executable
     session.clear()
     vim.fn.delete(root, "rf")
   end)
@@ -259,6 +313,33 @@ describe("nvim-stm32 operation execution", function()
     assert.equals("cmake", received[1].argv[1])
   end)
 
+  it("keeps the toolchain prefix after each command environment is merged", function()
+    local planned = assert(build.plan(project(root), { configuration = "Debug" }))
+    planned.commands[1].env = { PATH = "/configure-path" }
+    planned.commands[2].env = { PATH = "/build-path" }
+    write_reply(root, "app")
+    local paths = {}
+    local result
+    process.system = function(_, opts, callback)
+      paths[#paths + 1] = opts.env.PATH
+      callback({ code = 0, signal = 0 })
+      return { pid = #paths, kill = function() end }
+    end
+
+    operation.run(planned, { toolchain_path = "/toolchain" }, function(value)
+      result = value
+    end)
+    assert.is_true(vim.wait(200, function()
+      return result ~= nil
+    end))
+
+    assert.same({
+      "/toolchain:/configure-path",
+      "/toolchain:/build-path",
+    }, paths)
+    assert.is_true(result.ok, vim.inspect(result))
+  end)
+
   it("calls completion exactly once when a process callback repeats", function()
     local planned = assert(build.plan(project(root), { configuration = "Debug" }))
     local completions = 0
@@ -295,6 +376,56 @@ describe("nvim-stm32 operation execution", function()
     assert.is_nil(handle.pid())
     assert.is_false(result.ok)
     assert.equals("cmake-file-api-query", result.error.code)
+  end)
+
+  it("checks for CMake before writing a File API query", function()
+    local planned = assert(build.plan(project(root), { configuration = "Debug" }))
+    local calls = 0
+    local result
+    vim.fn.executable = function(name)
+      return name == "cmake" and 0 or original_executable(name)
+    end
+    process.run = function()
+      calls = calls + 1
+    end
+
+    local handle = operation.run(planned, {}, function(value)
+      result = value
+    end)
+
+    assert.equals(0, calls)
+    assert.equals(0, vim.fn.filereadable(planned.metadata.query_path))
+    assert.equals("completed", handle.state())
+    assert.equals("build-tool-unavailable", result.error.code)
+  end)
+
+  it("checks for Make before delegating a build", function()
+    local make_project = model.project({
+      id = root,
+      root = root,
+      kind = "make",
+      build = { adapter = "make", marker = root .. "/Makefile" },
+      images = {
+        { id = "application", name = "application", target = {} },
+      },
+    })
+    local planned = assert(build.plan(make_project))
+    local calls = 0
+    local result
+    vim.fn.executable = function(name)
+      return name == "make" and 0 or original_executable(name)
+    end
+    process.run = function()
+      calls = calls + 1
+    end
+
+    local handle = operation.run(planned, {}, function(value)
+      result = value
+    end)
+
+    assert.equals(0, calls)
+    assert.equals("completed", handle.state())
+    assert.equals("build-tool-unavailable", result.error.code)
   end)
 
   it("rejects malformed plans without throwing or spawning", function()

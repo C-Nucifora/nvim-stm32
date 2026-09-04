@@ -1,32 +1,29 @@
 --- Render the :STM32Info report.
 local M = {}
 
---- Render a Target as report lines.
----@param target Stm32Target
----@return string[]
-local function target_lines(target)
-  local lines = {
-    "Project: " .. target.root,
-    "Marker:  "
-      .. (target.marker and vim.fn.fnamemodify(target.marker, ":t") or "none"),
-    "Build:   " .. (target.build_backend or "no build file in this directory"),
-  }
-
+local function target_detail_lines(target, include_mcu)
+  local lines = {}
   if not target.mcu then
-    lines[#lines + 1] = "MCU:     not resolved"
+    if include_mcu then
+      lines[#lines + 1] = "MCU:     not resolved"
+    end
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Build and flash still work; family-specific features are off."
     return lines
   end
 
-  lines[#lines + 1] = ("MCU:     %s (%s, %s)"):format(
-    target.mcu,
-    target.family,
-    target.confidence
-  )
-  lines[#lines + 1] = "Core:    "
-    .. target.core
-    .. (target.fpu and (" with " .. target.fpu) or ", no FPU")
+  if include_mcu then
+    lines[#lines + 1] = ("MCU:     %s (%s, %s)"):format(
+      target.mcu,
+      target.family,
+      target.confidence
+    )
+  end
+  if target.core then
+    lines[#lines + 1] = "Core:    "
+      .. target.core
+      .. (target.fpu and (" with " .. target.fpu) or ", no FPU")
+  end
   if target.board then
     lines[#lines + 1] = "Board:   " .. target.board
   end
@@ -40,19 +37,35 @@ local function target_lines(target)
     lines[#lines + 1] = "OpenOCD: " .. target.openocd_cfg
   end
 
-  lines[#lines + 1] = ""
-  lines[#lines + 1] = ("Signals: %d of %d agree"):format(
-    target.agreement,
-    #target.signals
-  )
-  for _, signal in ipairs(target.signals) do
-    lines[#lines + 1] = ("  %-8s %-14s %s"):format(
-      signal.source,
-      signal.mcu,
-      vim.fn.fnamemodify(signal.file, ":t")
+  if target.signals then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = ("Signals: %d of %d agree"):format(
+      target.agreement or 0,
+      #target.signals
     )
+    for _, signal in ipairs(target.signals) do
+      lines[#lines + 1] = ("  %-8s %-14s %s"):format(
+        signal.source,
+        signal.mcu,
+        vim.fn.fnamemodify(signal.file, ":t")
+      )
+    end
   end
 
+  return lines
+end
+
+--- Render a Target as report lines.
+---@param target Stm32Target
+---@return string[]
+local function target_lines(target)
+  local lines = {
+    "Project: " .. target.root,
+    "Marker:  "
+      .. (target.marker and vim.fn.fnamemodify(target.marker, ":t") or "none"),
+    "Build:   " .. (target.build_backend or "no build file in this directory"),
+  }
+  vim.list_extend(lines, target_detail_lines(target, true))
   return lines
 end
 
@@ -69,13 +82,28 @@ function M.lines(value, state)
   local lines = {
     "Project: " .. value.id,
     "Root: " .. value.root,
+    "Marker: "
+      .. (value.build.marker and vim.fn.fnamemodify(value.build.marker, ":t") or "none"),
     "Build: " .. (value.build.adapter or value.kind or "not configured"),
     "Configuration: " .. (state.configuration or "not selected"),
     "Images:",
   }
   for _, image in ipairs(value.images) do
     local target = image.target or {}
-    lines[#lines + 1] = ("  %s: %s"):format(image.id, target.mcu or "not resolved")
+    if target.mcu then
+      lines[#lines + 1] = ("  %s: %s (%s, %s)"):format(
+        image.id,
+        target.mcu,
+        target.family or "unknown family",
+        target.confidence or "unknown"
+      )
+    else
+      lines[#lines + 1] = ("  %s: not resolved"):format(image.id)
+    end
+    local details = target_detail_lines(target, false)
+    for _, line in ipairs(details) do
+      lines[#lines + 1] = line == "" and "" or "    " .. line
+    end
   end
   lines[#lines + 1] = "Artifacts:"
   if #state.artifacts == 0 then

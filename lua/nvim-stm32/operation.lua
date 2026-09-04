@@ -151,6 +151,23 @@ local function validate_build_plan(plan)
   end
 end
 
+local function unavailable_tool(plan)
+  local checked = {}
+  for _, command in ipairs(plan.commands) do
+    local executable = command.argv[1]
+    if not checked[executable] then
+      checked[executable] = true
+      if vim.fn.executable(executable) ~= 1 then
+        return operation_error(
+          "build-tool-unavailable",
+          "required build tool not found: " .. executable,
+          plan
+        )
+      end
+    end
+  end
+end
+
 function M.run(plan, opts, callback)
   opts = opts or {}
   callback = callback or function() end
@@ -180,6 +197,12 @@ function M.run(plan, opts, callback)
   end
   local copied = copied_or_err
 
+  local tool_err = unavailable_tool(copied)
+  if tool_err then
+    complete(result_for_failure(copied, tool_err))
+    return safe_handle(copied.id)
+  end
+
   if copied.metadata.file_api then
     local query, query_err =
       file_api.write_query(copied.metadata.configuration.binary_dir)
@@ -198,6 +221,7 @@ function M.run(plan, opts, callback)
   local process_opts = {
     cwd = copied.metadata.project.root,
     env = env,
+    toolchain_path = cfg.toolchain_path,
     on_output = opts.on_output,
     max_output_bytes = opts.max_output_bytes,
     timeout_ms = opts.timeout_ms,

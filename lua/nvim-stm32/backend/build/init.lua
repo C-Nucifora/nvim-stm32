@@ -55,11 +55,20 @@ function M.find_elf(target, opts)
   if not opts.artifacts and target.root then
     local state = require("nvim-stm32.session").get(target.root)
     if #state.artifacts > 0 then
-      opts = vim.tbl_extend("force", {}, opts, { artifacts = state.artifacts })
       image_id = image_id or state.image_id
+      local configuration = opts.configuration or opts.preset or state.configuration
+      if type(configuration) == "table" then
+        configuration = configuration.name
+      end
+      local compatible = vim.tbl_filter(function(artifact)
+        return (not image_id or artifact.image_id == image_id)
+          and (not configuration or artifact.configuration == configuration)
+          and artifact.kind == "elf"
+      end, state.artifacts)
+      opts = vim.tbl_extend("force", {}, opts, { artifacts = compatible })
       if not image_id then
         local ids = {}
-        for _, artifact in ipairs(state.artifacts) do
+        for _, artifact in ipairs(compatible) do
           ids[artifact.image_id] = true
         end
         local sole
