@@ -21,16 +21,29 @@ describe("nvim-stm32.health.tool_status", function()
     assert.equals("warn", level)
     assert.is_truthy(table.concat(advice, " "):find("$PATH", 1, true))
   end)
+
+  it("treats an empty exepath result as not found", function()
+    -- vim.fn.exepath returns "" rather than nil for a missing program, and ""
+    -- is truthy in Lua, so this is the case that would otherwise report ok
+    -- with a blank path.
+    local level, msg = health.tool_status("cmake", "", nil)
+    assert.equals("warn", level)
+    assert.is_truthy(msg:find("not found", 1, true))
+  end)
 end)
 
 describe("nvim-stm32.health.check", function()
   it("runs without error", function()
     -- :checkhealth loads the module and calls check(); a nil index in there
-    -- is a traceback in the user's face, so at least prove it survives a
-    -- real run.
+    -- is a traceback in the user's face. The engine prints the "nvim-stm32:"
+    -- heading itself before calling check(), so that string alone survives
+    -- even a check() that errors immediately; assert on a section title only
+    -- our own code emits, and on the absence of a traceback, so this case
+    -- actually fails when check() throws.
     vim.cmd("checkhealth nvim-stm32")
     local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
-    assert.is_truthy(out:find("nvim-stm32", 1, true))
+    assert.is_truthy(out:find("nvim-stm32: programmers", 1, true))
+    assert.is_falsy(out:find("stack traceback", 1, true))
     vim.cmd("bwipeout!")
   end)
 end)

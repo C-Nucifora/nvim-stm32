@@ -11,12 +11,15 @@ local h = vim.health
 --- Pure, so the specs pin the wording without a real toolchain on the runner,
 --- and so a missing tool always reports the config key that overrides its path
 --- instead of a bare "not found".
+--- `path == ""` counts as not found: vim.fn.exepath() returns "" rather than
+--- nil for a missing program, and an unguarded `if path then` would treat that
+--- as truthy and print an ok line with nothing after the colon.
 ---@param label string        the program's name, as the user would type it
----@param path string|nil     the resolved path, or nil
+---@param path string|nil     the resolved path, "", or nil
 ---@param opt_key string|nil  config key that overrides this path
 ---@return "ok"|"warn" level, string msg, string[]|nil advice
 function M.tool_status(label, path, opt_key)
-  if path then
+  if path and path ~= "" then
     return "ok", label .. ": " .. path
   end
   local advice = opt_key
