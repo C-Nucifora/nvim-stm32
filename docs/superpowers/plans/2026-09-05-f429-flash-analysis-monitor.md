@@ -141,6 +141,7 @@
 - Create: `lua/nvim-stm32/operations/analyze.lua`
 - Create: `lua/nvim-stm32/ui/analysis.lua`
 - Modify: `lua/nvim-stm32/tools.lua`
+- Modify: `lua/nvim-stm32/process.lua`
 - Modify: `lua/nvim-stm32/init.lua`
 - Modify: `plugin/nvim-stm32.lua`
 - Test: `tests/build_lifecycle_spec.lua`
@@ -148,11 +149,12 @@
 - Test: `tests/size_spec.lua`
 - Test: `tests/objdump_spec.lua`
 - Test: `tests/analyze_spec.lua`
+- Test: `tests/process_spec.lua`
 
 **Interfaces:**
 
 - Consumes: fresh ELF artifacts from the resolved session context, optional matching MAP artifacts for provenance, and linker signal paths retained on each image target.
-- Produces: `build.plan(project, { mode = "build"|"clean"|"rebuild" })`, `linker.parse(text) -> MemoryRegion[] | nil, ModelError`, `size.parse(text) -> SizeSummary | nil, ModelError`, `objdump.parse_sections(text) -> ElfSection[] | nil, ModelError`, `analyze.plan(project, opts) -> OperationPlan`, and `analyze.complete(plan, process_result) -> Result` with `metadata.analysis`.
+- Produces: `build.plan(project, { mode = "build"|"clean"|"rebuild" })`, per-command output in process results, `linker.parse(text) -> MemoryRegion[] | nil, ModelError`, `size.parse(text) -> SizeSummary | nil, ModelError`, `objdump.parse_sections(text) -> ElfSection[] | nil, ModelError`, `analyze.plan(project, opts) -> OperationPlan`, and `analyze.complete(plan, process_result) -> Result` with `metadata.analysis`.
 
 - [ ] **Step 1: Write failing build lifecycle tests**
 
@@ -240,7 +242,7 @@
 
 - [ ] **Step 10: Implement analysis planning, completion, and UI**
 
-  Register `analyze` in `init.operation_module`. Capture command output separately through the shared executor so the two parsers never guess where one tool's output ends. `:STM32Analyze` displays one line per memory region with used bytes, total bytes, and percentage, followed by section rows. `:STM32Plan analyze` shows both exact argv lists without running either tool.
+  Extend `process.run` results with a dense `commands` list containing each command's argv, output, exit code, and signal. Register `analyze` in `init.operation_module` and use those separate outputs so the two parsers never guess where one tool's output ends. `:STM32Analyze` displays one line per memory region with used bytes, total bytes, and percentage, followed by section rows. `:STM32Plan analyze` shows both exact argv lists without running either tool.
 
 - [ ] **Step 11: Verify against the real `s5/dt` ELF**
 
@@ -255,7 +257,7 @@
   ```sh
   scripts/test.sh
   stylua --check lua/ tests/
-  git add lua/nvim-stm32/inspect lua/nvim-stm32/operations/build.lua lua/nvim-stm32/operations/analyze.lua lua/nvim-stm32/ui/analysis.lua lua/nvim-stm32/tools.lua lua/nvim-stm32/init.lua plugin/nvim-stm32.lua tests/build_lifecycle_spec.lua tests/linker_spec.lua tests/size_spec.lua tests/objdump_spec.lua tests/analyze_spec.lua
+  git add lua/nvim-stm32/inspect lua/nvim-stm32/operations/build.lua lua/nvim-stm32/operations/analyze.lua lua/nvim-stm32/ui/analysis.lua lua/nvim-stm32/tools.lua lua/nvim-stm32/process.lua lua/nvim-stm32/init.lua plugin/nvim-stm32.lua tests/build_lifecycle_spec.lua tests/linker_spec.lua tests/size_spec.lua tests/objdump_spec.lua tests/analyze_spec.lua tests/process_spec.lua
   git commit -m "feat(build): add lifecycle and F429 analysis"
   ```
 
@@ -420,7 +422,7 @@
 **Interfaces:**
 
 - Consumes: validated plans and the current sequential process runner.
-- Produces: `locks.acquire(owner_id, requested) -> release | nil, ModelError`, process results with `command_index` and `commands`, and `operation.execute(plan, opts, hooks, callback) -> Handle`.
+- Produces: `locks.acquire(owner_id, requested) -> release | nil, ModelError`, process results with `command_index`, an `after_command` continuation gate, and `operation.execute(plan, opts, hooks, callback) -> Handle`.
 
 - [ ] **Step 1: Write failing lock-manager tests**
 
@@ -446,7 +448,7 @@
 
 - [ ] **Step 4: Write failing process and executor tests**
 
-  Add `command_index` expectations for success, middle-command failure, cancellation, timeout, and spawn failure. Each entry in `result.commands` must retain its own argv, output, exit code, and signal so analysis and target-identification parsers never split aggregated output. Write executor tests for lock release on every terminal path and no release when cancellation is merely requested but the child has not exited.
+  Add `command_index` expectations for success, middle-command failure, cancellation, timeout, and spawn failure. Preserve Task 2's per-command result records. Write executor tests for lock release on every terminal path and no release when cancellation is merely requested but the child has not exited.
 
 - [ ] **Step 5: Add `command_index` without changing process semantics**
 
@@ -531,7 +533,7 @@
 
   - `flash`: identify the connected target, program and verify each ordered image, then reset once.
   - `reset`: one reset command, no artifact or build.
-  - `erase`: identify the connected target, then run one mass-erase command with no artifact or build. `opts.confirmed == true` is mandatory.
+  - `erase`: identify the connected target, then run one mass-erase command with no artifact or build. `opts.confirmed == true` is mandatory for execution. `opts.preview == true` may build a non-executing plan without confirmation so `:STM32Plan erase` remains useful.
   - Every hardware plan owns `{ kind = "probe", id = backend .. ":" .. serial }`.
   - `reset` also identifies the target before reset when the chosen driver supports identity inspection.
   - Parsed target identity is compared before the first destructive or state-changing command. A mismatch returns `target-mismatch` unless `opts.allow_target_mismatch == true` for that one plan.
