@@ -1,0 +1,11 @@
+Mcu.CPN=STM32F429ZIT6
+Mcu.Family=STM32F4
+Mcu.Name=STM32F429ZITx
+Mcu.Package=LQFP144
+Mcu.UserName=STM32F429ZITx
+ProjectManager.DeviceId=STM32F429ZITx
+ProjectManager.FirmwarePackage=STM32Cube FW_F4 V1.28.3
+ProjectManager.ProjectName=dt
+ProjectManager.TargetToolchain=CMake
+board=NUCLEO-F429ZI
+boardIOC=true
