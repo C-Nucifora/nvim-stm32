@@ -23,16 +23,45 @@ local function read_json(path, code)
   return value
 end
 
+local function is_dense_array(value)
+  if type(value) ~= "table" then
+    return false
+  end
+  local count = 0
+  local maximum = 0
+  for key in pairs(value) do
+    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+      return false
+    end
+    count = count + 1
+    maximum = math.max(maximum, key)
+  end
+  return maximum == count
+end
+
+local function path_is_within(root, path)
+  return path == root or path:sub(1, #root + 1) == root .. "/"
+end
+
 local function path_in_reply(reply_dir, name)
   if type(name) ~= "string" or name == "" then
     return nil
   end
   local root = vim.fs.normalize(reply_dir)
   local path = vim.fs.normalize(root .. "/" .. name)
-  if path == root or path:sub(1, #root + 1) ~= root .. "/" then
+  if path == root or not path_is_within(root, path) then
     return nil
   end
-  return path
+  local root_real = vim.uv.fs_realpath(root)
+  local stat = vim.uv.fs_lstat(path)
+  if not stat then
+    return path
+  end
+  local path_real = vim.uv.fs_realpath(path)
+  if not root_real or not path_real or not path_is_within(root_real, path_real) then
+    return nil
+  end
+  return path_real
 end
 
 local function is_absolute(path)
@@ -55,6 +84,53 @@ local function codemodel_replies(value, found)
       codemodel_replies(child, found)
     end
   end
+end
+
+local function valid_codemodel(codemodel)
+  if
+    codemodel.kind ~= "codemodel"
+    or type(codemodel.version) ~= "table"
+    or codemodel.version.major ~= 2
+    or not is_dense_array(codemodel.configurations)
+  then
+    return false
+  end
+  for _, configuration in ipairs(codemodel.configurations) do
+    if type(configuration) ~= "table" or not is_dense_array(configuration.targets) then
+      return false
+    end
+    local directories = configuration.directories
+    if directories == nil then
+      directories = {}
+    elseif not is_dense_array(directories) then
+      return false
+    end
+    for _, directory in ipairs(directories) do
+      if type(directory) ~= "table" then
+        return false
+      end
+    end
+    for _, target in ipairs(configuration.targets) do
+      if
+        type(target) ~= "table"
+        or type(target.jsonFile) ~= "string"
+        or target.jsonFile == ""
+      then
+        return false
+      end
+      if target.directoryIndex ~= nil then
+        if
+          type(target.directoryIndex) ~= "number"
+          or target.directoryIndex < 0
+          or target.directoryIndex % 1 ~= 0
+          or not directories[target.directoryIndex + 1]
+        then
+          return false
+        end
+      end
+    end
+  end
+  return true
 end
 
 local function index_files(reply_dir)
@@ -103,13 +179,7 @@ local function newest_codemodel(reply_dir)
           else
             local codemodel, codemodel_err =
               read_json(codemodel_path, "cmake-file-api-codemodel")
-            if
-              codemodel
-              and codemodel.kind == "codemodel"
-              and type(codemodel.version) == "table"
-              and codemodel.version.major == 2
-              and type(codemodel.configurations) == "table"
-            then
+            if codemodel and valid_codemodel(codemodel) then
               return codemodel, codemodel_path
             end
             last_err = codemodel_err
@@ -148,13 +218,34 @@ local function target_record(reply_dir, codemodel_path, directories, target_ref)
   if not target then
     return nil, target_err
   end
+  if type(target.type) ~= "string" then
+    return nil, file_error("cmake-file-api-target", path, "has no target type")
+  end
   if target.type ~= "EXECUTABLE" then
     return false
   end
 
   local directory = {}
-  if type(target_ref.directoryIndex) == "number" then
+  if target_ref.directoryIndex ~= nil then
+    if
+      type(target_ref.directoryIndex) ~= "number"
+      or target_ref.directoryIndex < 0
+      or target_ref.directoryIndex % 1 ~= 0
+      or type(directories[target_ref.directoryIndex + 1]) ~= "table"
+    then
+      return nil,
+        file_error("cmake-file-api-target", path, "has an invalid directory index")
+    end
     directory = directories[target_ref.directoryIndex + 1] or {}
+  end
+  if target.paths ~= nil and type(target.paths) ~= "table" then
+    return nil, file_error("cmake-file-api-target", path, "has invalid paths")
+  end
+  if target.artifacts ~= nil and not is_dense_array(target.artifacts) then
+    return nil, file_error("cmake-file-api-target", path, "has invalid artifacts")
+  end
+  if target.link ~= nil and type(target.link) ~= "table" then
+    return nil, file_error("cmake-file-api-target", path, "has invalid linker metadata")
   end
   local paths = target.paths or {}
   local source_dir = paths.source or directory.source
@@ -196,8 +287,8 @@ local function target_record(reply_dir, codemodel_path, directories, target_ref)
     build_dir = vim.fs.normalize(build_dir),
     artifacts = artifacts,
   }
-  if target.link and target.link.commandFragments then
-    if type(target.link.commandFragments) ~= "table" then
+  if target.link and target.link.commandFragments ~= nil then
+    if not is_dense_array(target.link.commandFragments) then
       return nil,
         file_error(
           "cmake-file-api-target",
@@ -222,14 +313,56 @@ local function target_record(reply_dir, codemodel_path, directories, target_ref)
   return record
 end
 
+local function query_directory(binary_dir)
+  local root = vim.fs.normalize(binary_dir)
+  local mkdir_ok, mkdir_result = pcall(vim.fn.mkdir, root, "p")
+  if not mkdir_ok or (mkdir_result ~= 1 and vim.fn.isdirectory(root) ~= 1) then
+    return nil
+  end
+  local root_real = vim.uv.fs_realpath(root)
+  if not root_real then
+    return nil
+  end
+
+  local current = root_real
+  for _, part in ipairs({ ".cmake", "api", "v1", "query", "client-nvim-stm32" }) do
+    local path = current .. "/" .. part
+    local stat = vim.uv.fs_lstat(path)
+    if stat then
+      if stat.type ~= "directory" and stat.type ~= "link" then
+        return nil
+      end
+    else
+      local child_ok, child_result = pcall(vim.fn.mkdir, path)
+      if not child_ok or child_result ~= 1 then
+        return nil
+      end
+    end
+    current = vim.uv.fs_realpath(path)
+    if not current or not path_is_within(root_real, current) then
+      return nil
+    end
+  end
+  return current
+end
+
+local function query_file_is_safe(path)
+  local stat = vim.uv.fs_lstat(path)
+  return not stat or stat.type ~= "link"
+end
+
 function M.write_query(binary_dir)
-  local query_dir = binary_dir .. "/.cmake/api/v1/query/client-nvim-stm32"
-  local query_path = query_dir .. "/query.json"
-  local temp_path = query_path .. ".tmp"
-  local mkdir_ok, mkdir_result = pcall(vim.fn.mkdir, query_dir, "p")
-  if not mkdir_ok or (mkdir_result ~= 1 and vim.fn.isdirectory(query_dir) ~= 1) then
+  local query_path = binary_dir .. "/.cmake/api/v1/query/client-nvim-stm32/query.json"
+  local query_dir = query_directory(binary_dir)
+  if not query_dir then
     return nil,
-      file_error("cmake-file-api-query", query_dir, "could not create query directory")
+      file_error("cmake-file-api-query", query_path, "could not create query directory")
+  end
+  local write_path = query_dir .. "/query.json"
+  local temp_path = write_path .. ".tmp"
+  if not query_file_is_safe(write_path) or not query_file_is_safe(temp_path) then
+    return nil,
+      file_error("cmake-file-api-query", query_path, "refuses a symlinked query path")
   end
   local contents =
     vim.json.encode({ requests = { { kind = "codemodel", version = 2 } } })
@@ -237,7 +370,7 @@ function M.write_query(binary_dir)
   if not write_ok or write_result ~= 0 then
     return nil, file_error("cmake-file-api-query", temp_path, "could not write query")
   end
-  local renamed, rename_err = vim.uv.fs_rename(temp_path, query_path)
+  local renamed, rename_err = vim.uv.fs_rename(temp_path, write_path)
   if not renamed then
     return nil,
       file_error(
