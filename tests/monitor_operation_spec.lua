@@ -99,6 +99,25 @@ describe("nvim-stm32 monitor operation plans", function()
     end
   )
 
+  it("does not let planning disable character-device validation", function()
+    local opts = {
+      platform = "Linux",
+      device = "/tmp/serial.log",
+      require_character_device = false,
+      glob = function()
+        return {}
+      end,
+      stat = function()
+        return { type = "file" }
+      end,
+    }
+
+    local plan, err = monitor.plan(project(root), opts)
+
+    assert.is_nil(plan)
+    assert.equals("monitor-device-not-found", err.code)
+  end)
+
   it(
     "ignores a stale session path and requires a picker for several candidates",
     function()
@@ -261,6 +280,91 @@ describe("nvim-stm32 monitor operation lifecycle", function()
 
     assert.equals(0, starts)
     assert.equals("monitor-device-not-found", result.error.code)
+  end)
+
+  it("does not let execution disable character-device validation", function()
+    local starts = 0
+    process.system = function(_, _, callback)
+      starts = starts + 1
+      callback({ code = 0, signal = 0 })
+      return { pid = 95 + starts, kill = function() end }
+    end
+    local result
+
+    monitor.execute(planned, {
+      platform = "Linux",
+      require_character_device = false,
+      stat = function()
+        return { type = "file" }
+      end,
+    }, function(value)
+      result = value
+    end)
+
+    assert.is_true(vim.wait(100, function()
+      return result ~= nil
+    end))
+    assert.equals(0, starts)
+    assert.equals("monitor-device-not-found", result.error.code)
+  end)
+
+  it("stops every tampered monitor plan before process startup", function()
+    local cases = {
+      {
+        name = "device",
+        mutate = function(plan)
+          plan.metadata.device = "/dev/ttyACM1"
+        end,
+      },
+      {
+        name = "baud",
+        mutate = function(plan)
+          plan.metadata.baud = 57600
+        end,
+      },
+      {
+        name = "platform-derived stty argv",
+        mutate = function(plan)
+          plan.commands[1].argv[2] = "-f"
+        end,
+      },
+      {
+        name = "serial-device lock",
+        mutate = function(plan)
+          plan.locks[1].id = "/dev/ttyACM1"
+        end,
+      },
+      {
+        name = "project id",
+        mutate = function(plan)
+          plan.project_id = root .. "/other"
+        end,
+      },
+      {
+        name = "reset policy",
+        mutate = function(plan)
+          plan.reset_policy = "final"
+        end,
+      },
+    }
+
+    for _, case in ipairs(cases) do
+      local tampered = vim.deepcopy(planned)
+      case.mutate(tampered)
+      local starts = 0
+      process.system = function()
+        starts = starts + 1
+      end
+      local result
+      local opts = device_opts({ "/dev/ttyACM0", "/dev/ttyACM1" })
+
+      monitor.execute(tampered, opts, function(value)
+        result = value
+      end)
+
+      assert.equals(0, starts, case.name)
+      assert.equals("monitor-plan-tampered", result.error.code, case.name)
+    end
   end)
 
   it("reports lock contention without starting another monitor", function()

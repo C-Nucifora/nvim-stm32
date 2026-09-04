@@ -32,7 +32,7 @@ function M.validate(path, opts)
   end
 
   local stat = (opts.stat or vim.uv.fs_stat)(path)
-  if not stat or opts.require_character_device ~= false and stat.type ~= "char" then
+  if not stat or stat.type ~= "char" then
     return nil,
       monitor_error("monitor-device-not-found", "serial device not found: " .. path)
   end
