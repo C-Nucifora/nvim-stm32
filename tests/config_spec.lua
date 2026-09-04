@@ -18,10 +18,14 @@ describe("nvim-stm32.config", function()
     assert.equals(115200, cfg.monitor.baud)
   end)
 
-  it("merges nested tables key by key", function()
+  it("merges nested tables key by key without replacing whole subtable", function()
     local cfg = config.resolve({ monitor = { baud = 9600 } })
     assert.equals(9600, cfg.monitor.baud)
     assert.is_nil(cfg.monitor.device)
+    -- float has two non-nil defaults; deep merge must preserve close_on_success_ms
+    local cfg2 = config.resolve({ float = { border = "single" } })
+    assert.equals("single", cfg2.float.border)
+    assert.equals(1500, cfg2.float.close_on_success_ms)
   end)
 
   it("does not mutate the defaults", function()
