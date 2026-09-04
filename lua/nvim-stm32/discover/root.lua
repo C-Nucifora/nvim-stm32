@@ -2,9 +2,9 @@ local M = {}
 
 M.markers = {
   { file = "CMakePresets.json", backend = "cmake_presets", strong = true },
+  { glob = "*.ioc", backend = nil, strong = true },
   { file = "CMakeLists.txt", backend = "cmake_plain" },
   { file = "Makefile", backend = "make" },
-  { glob = "*.ioc", backend = nil, strong = true },
 }
 
 local function buffer_name(bufnr)
@@ -75,11 +75,6 @@ end
 
 function M.find(dir)
   local candidates = walk_candidates(vim.fs.normalize(dir or M.start_dir()))
-  for _, candidate in ipairs(candidates) do
-    if vim.fs.basename(candidate.marker) == "CMakePresets.json" then
-      return candidate.root, candidate.adapter, candidate.marker
-    end
-  end
   for _, candidate in ipairs(candidates) do
     if candidate.strong then
       return candidate.root, candidate.adapter, candidate.marker

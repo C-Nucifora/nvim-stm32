@@ -9,6 +9,11 @@ local function fixture(rel)
   return here .. "/fixtures/" .. rel
 end
 
+local function write(path, lines)
+  vim.fn.mkdir(vim.fs.dirname(path), "p")
+  vim.fn.writefile(lines, path)
+end
+
 describe("nvim-stm32 project discovery", function()
   it("prefers the outer project over generated nested CMake", function()
     local found = assert(root.find(fixture("nucleo_cmake/cmake/stm32cubemx")))
@@ -53,5 +58,81 @@ describe("nvim-stm32 project discovery", function()
     local target = assert(detect.target(fixture("multi_image/CM7")))
     assert.equals("CM7", target.image_id)
     assert.equals("cortex-m7", target.core)
+  end)
+
+  it("prefers an .ioc marker over a weak CMakeLists marker in one directory", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/.git", "p")
+    write(tmp .. "/firmware/CMakeLists.txt", { "cmake_minimum_required(VERSION 3.20)" })
+    write(tmp .. "/firmware/app.ioc", { "Mcu.Name=STM32F429ZITx" })
+
+    local found, adapter, marker = root.find(tmp .. "/firmware")
+    assert.equals(tmp .. "/firmware", found)
+    assert.is_nil(adapter)
+    assert.equals(tmp .. "/firmware/app.ioc", marker)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("keeps a nearer .ioc project ahead of an outer presets project", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/.git", "p")
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/firmware/app.ioc", { "Mcu.Name=STM32F429ZITx" })
+
+    local found, adapter, marker = root.find(tmp .. "/firmware")
+    assert.equals(tmp .. "/firmware", found)
+    assert.is_nil(adapter)
+    assert.equals(tmp .. "/firmware/app.ioc", marker)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("collects CMake signals for every image and derives their hints", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/alpha/CMakeLists.txt", {
+      "set(MCU STM32H747xx)",
+      "add_executable(control_CM4 main.c)",
+    })
+    write(tmp .. "/beta/CMakeLists.txt", {
+      "set(MCU STM32H747xx)",
+      "add_executable(sensor main.c)",
+      "add_compile_options(-mcpu=cortex-m7)",
+    })
+
+    local found = vim.tbl_filter(function(signal)
+      return signal.source == "cmake"
+    end, signals.collect(tmp))
+    assert.equals(2, #found)
+    assert.same(
+      { "CM4", "CM7" },
+      vim.tbl_map(function(signal)
+        return signal.image_hint
+      end, found)
+    )
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("warns when an unhinted exact signal accompanies hinted images", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/.git", "p")
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/app.ioc", { "Mcu.Name=STM32H747XIHx" })
+    write(tmp .. "/CM4/app.ioc", { "Mcu.Name=STM32H747XIHx" })
+    write(tmp .. "/CM7/app.ioc", { "Mcu.Name=STM32H747XIHx" })
+
+    local resolved = assert(project.resolve(tmp .. "/CM4"))
+    assert.equals("ambiguous-images", resolved.provenance.warnings[1].code)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("warns when exact unhinted signals collapse into one group", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/.git", "p")
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/first.ioc", { "Mcu.Name=STM32H747XIHx" })
+    write(tmp .. "/second.ioc", { "Mcu.Name=STM32H747XIHx" })
+
+    local resolved = assert(project.resolve(tmp))
+    assert.equals("ambiguous-images", resolved.provenance.warnings[1].code)
+    vim.fn.delete(tmp, "rf")
   end)
 end)

@@ -5,6 +5,35 @@ local targets = require("nvim-stm32.targets")
 
 local M = {}
 
+local function enclosing_multi_image_preset(dir)
+  local git = vim.fs.find(".git", { path = dir, upward = true, limit = 1 })[1]
+  local stop = git and vim.fs.dirname(git) or nil
+  local current = vim.fs.dirname(dir)
+  while current and current ~= "" do
+    local marker = current .. "/CMakePresets.json"
+    if vim.uv.fs_stat(marker) then
+      local hints = {}
+      for _, signal in ipairs(signals.collect(current)) do
+        if signal.confidence == "exact" and signal.image_hint then
+          hints[signal.image_hint] = true
+        end
+      end
+      if vim.tbl_count(hints) > 1 then
+        return current, "cmake_presets", marker
+      end
+    end
+    if current == stop then
+      break
+    end
+    local parent = vim.fs.dirname(current)
+    if parent == current then
+      break
+    end
+    current = parent
+  end
+  return nil, nil, nil
+end
+
 local function target_from(group, all_signals)
   local found = group[1]
   local info = found.mcu and targets.resolve(found.mcu) or {}
@@ -66,7 +95,7 @@ local function collect_groups(found)
     end
     groups[key][#groups[key] + 1] = signal
   end
-  return order
+  return order, candidates
 end
 
 local function group_id(group, count, index)
@@ -93,10 +122,19 @@ function M.resolve(dir)
       })
   end
 
+  if marker:match("%.ioc$") then
+    local multi_root, multi_adapter, multi_marker =
+      enclosing_multi_image_preset(project_root)
+    if multi_root then
+      project_root, adapter, marker = multi_root, multi_adapter, multi_marker
+    end
+  end
+
   local found = signals.collect(project_root)
-  local groups = collect_groups(found)
+  local groups, candidates = collect_groups(found)
   if #groups == 0 then
     groups = { { { mcu = nil, confidence = "unknown", image_hint = nil } } }
+    candidates = {}
   end
 
   table.sort(groups, function(a, b)
@@ -124,13 +162,15 @@ function M.resolve(dir)
   end
 
   local provenance = { signals = found }
-  local unhinted = 0
-  for _, group in ipairs(groups) do
-    if not group[1].image_hint then
+  local unhinted, hinted = 0, 0
+  for _, signal in ipairs(candidates) do
+    if signal.image_hint then
+      hinted = hinted + 1
+    else
       unhinted = unhinted + 1
     end
   end
-  if unhinted > 1 then
+  if unhinted > 1 or (unhinted > 0 and hinted > 0) then
     provenance.warnings = {
       model.error({
         code = "ambiguous-images",

@@ -10,7 +10,20 @@ local function paths(pattern)
   return found
 end
 
-local function image_hint(root, path, core)
+local function image_hint(root, path, core, build_target)
+  if build_target then
+    local named = build_target:upper():match("CM([47])")
+    if named then
+      return "CM" .. named
+    end
+  end
+  if core then
+    local named = core:upper():match("CORTEX%-M([47])")
+      or core:upper():match("CM([47])")
+    if named then
+      return "CM" .. named
+    end
+  end
   local relative = path:sub(#root + 2)
   local upper = relative:upper()
   local hinted = upper:match("^CM([47])/")
@@ -19,13 +32,36 @@ local function image_hint(root, path, core)
   if hinted then
     return "CM" .. hinted
   end
-  if core then
-    local named = core:upper():match("CM([47])")
-    if named then
-      return "CM" .. named
+  return nil
+end
+
+local function cmake_files(root)
+  local seen, out = {}, {}
+  for _, pattern in ipairs({ root .. "/**/CMakeLists.txt", root .. "/**/*.cmake" }) do
+    for _, path in ipairs(paths(pattern)) do
+      if not seen[path] then
+        seen[path] = true
+        out[#out + 1] = path
+      end
     end
   end
-  return nil
+  table.sort(out)
+  return out
+end
+
+local function read_cmake(path)
+  local file = io.open(path, "r")
+  if not file then
+    return nil, nil, nil, nil
+  end
+  local contents = file:read("*a")
+  file:close()
+  return contents:match("(STM32%u%d[%u%d]+[Xx][Xx])%f[^%w_]"),
+    contents:match("%-mcpu=([%w%-%.]+)"),
+    contents:match("%-mfpu=([%w%-%.]+)"),
+    contents:match("add_executable%s*%(%s*([%w_%-]+)") or contents:match(
+      "add_custom_target%s*%(%s*([%w_%-]+)"
+    )
 end
 
 function M.read_ioc(path)
@@ -34,15 +70,16 @@ function M.read_ioc(path)
     return nil, nil
   end
 
-  local mcu, device_id, board
+  local mcu, device_id, board, user_name
   for line in file:lines() do
     line = line:gsub("\r$", "")
     mcu = mcu or line:match("^Mcu%.Name=(.+)$")
     device_id = device_id or line:match("^ProjectManager%.DeviceId=(.+)$")
     board = board or line:match("^board=(.+)$")
+    user_name = user_name or line:match("^Mcu%.UserName=(.+)$")
   end
   file:close()
-  return mcu or device_id, board
+  return mcu or device_id, board, user_name
 end
 
 function M.mcu_from_startup(name)
@@ -66,34 +103,21 @@ function M.mcu_from_linker(name)
 end
 
 function M.scan_cmake(root)
-  local files = {
-    root .. "/CMakeLists.txt",
-    root .. "/cmake/stm32cubemx/CMakeLists.txt",
-  }
-  vim.list_extend(files, paths(root .. "/cmake/*.cmake"))
-
   local mcu, core, fpu, source
-  for _, path in ipairs(files) do
-    local file = io.open(path, "r")
-    if file then
-      local contents = file:read("*a")
-      file:close()
-      if not mcu then
-        local hit = contents:match("(STM32%u%d[%u%d]+[Xx][Xx])")
-        if hit and targets.parse(hit) then
-          mcu, source = hit, path
-        end
-      end
-      core = core or contents:match("%-mcpu=([%w%-%.]+)")
-      fpu = fpu or contents:match("%-mfpu=([%w%-%.]+)")
+  for _, path in ipairs(cmake_files(root)) do
+    local hit, found_core, found_fpu = read_cmake(path)
+    if not mcu and hit and targets.parse(hit) then
+      mcu, source = hit, path
     end
+    core = core or found_core
+    fpu = fpu or found_fpu
   end
   return mcu, core, fpu, source
 end
 
 local function append_ioc_signals(out, root)
   for _, path in ipairs(paths(root .. "/**/*.ioc")) do
-    local mcu, board = M.read_ioc(path)
+    local mcu, board, user_name = M.read_ioc(path)
     if mcu and targets.parse(mcu) then
       out[#out + 1] = {
         source = "ioc",
@@ -103,7 +127,7 @@ local function append_ioc_signals(out, root)
         board = board,
         core = nil,
         fpu = nil,
-        image_hint = image_hint(root, path),
+        image_hint = image_hint(root, path, user_name),
       }
     end
   end
@@ -152,17 +176,36 @@ local function append_linker_signals(out, root)
 end
 
 local function append_cmake_signals(out, root)
-  local mcu, core, fpu, file = M.scan_cmake(root)
-  if mcu then
+  local _, aggregate_core, aggregate_fpu = M.scan_cmake(root)
+  local matches = {}
+  for _, path in ipairs(cmake_files(root)) do
+    local mcu, core, fpu, build_target = read_cmake(path)
+    if mcu and targets.parse(mcu) then
+      matches[#matches + 1] = {
+        mcu = mcu,
+        core = core,
+        fpu = fpu,
+        file = path,
+        build_target = build_target,
+      }
+    end
+  end
+  for _, match in ipairs(matches) do
     out[#out + 1] = {
       source = "cmake",
-      file = file,
-      mcu = mcu,
+      file = match.file,
+      mcu = match.mcu,
       confidence = "inferred",
       board = nil,
-      core = core,
-      fpu = fpu,
-      image_hint = image_hint(root, file, core),
+      core = match.core or aggregate_core,
+      fpu = match.fpu or aggregate_fpu,
+      build_target = match.build_target,
+      image_hint = image_hint(
+        root,
+        match.file,
+        match.core or aggregate_core,
+        match.build_target
+      ),
     }
   end
 end
