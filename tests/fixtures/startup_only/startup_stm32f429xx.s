@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file      startup_stm32f429xx.s
   * @author    MCD Application Team
-  * @brief     STM32F429xx Devices vector table for GCC based toolchains. 
+  * @brief     STM32F429xx Devices vector table for GCC based toolchains.
   *            This module performs:
   *                - Set the initial SP
   *                - Set the initial PC == Reset_Handler,

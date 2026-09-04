@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 # STM32CubeMX generated symbols (macros)
-set(MX_Defines_Syms 
-	USE_HAL_DRIVER 
+set(MX_Defines_Syms
+	USE_HAL_DRIVER
 	STM32F429xx
     $<$<CONFIG:Debug>:DEBUG>
 )
