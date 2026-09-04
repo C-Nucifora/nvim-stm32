@@ -174,9 +174,6 @@ function M.resolve(dir)
     candidates = {}
   end
 
-  table.sort(groups, function(a, b)
-    return group_id(a, #groups, 1) < group_id(b, #groups, 2)
-  end)
   local ambiguous = ambiguous_groups(groups)
   local _, measured_core, measured_fpu = nil, nil, nil
   if #groups == 1 and not ambiguous then

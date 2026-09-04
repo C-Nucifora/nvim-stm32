@@ -273,4 +273,35 @@ describe("nvim-stm32 project discovery", function()
     assert.equals("STM32F429ZITX", resolved.images[1].target.mcu)
     vim.fn.delete(tmp, "rf")
   end)
+
+  it("keeps anonymous image ids in collected signal order", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/STM32F429ZITX_FLASH.ld", { "ENTRY(Reset_Handler)" })
+    write(tmp .. "/STM32F746ZGTx_FLASH.ld", { "ENTRY(Reset_Handler)" })
+    write(tmp .. "/STM32H743ZITx_FLASH.ld", { "ENTRY(Reset_Handler)" })
+
+    local found = signals.collect(tmp)
+    assert.same(
+      { "STM32F429ZITX", "STM32F746ZGTX", "STM32H743ZITX" },
+      vim.tbl_map(function(signal)
+        return signal.mcu
+      end, found)
+    )
+
+    local resolved = assert(project.resolve(tmp))
+    assert.same(
+      { "image_1", "image_2", "image_3" },
+      vim.tbl_map(function(image)
+        return image.id
+      end, resolved.images)
+    )
+    assert.same(
+      { "STM32F429ZITX", "STM32F746ZGTX", "STM32H743ZITX" },
+      vim.tbl_map(function(image)
+        return image.target.mcu
+      end, resolved.images)
+    )
+    vim.fn.delete(tmp, "rf")
+  end)
 end)
