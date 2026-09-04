@@ -243,6 +243,10 @@ function M.run(plan, opts, callback)
     }
   elseif type(plan) == "table" and plan.kind == "analyze" then
     hooks = analyze_hooks()
+  elseif type(plan) == "table" and plan.kind == "monitor" then
+    local monitor = require("nvim-stm32.operations.monitor")
+    hooks = monitor.hooks()
+    opts = vim.tbl_extend("force", vim.deepcopy(opts or {}), { streaming = true })
   else
     hooks = {
       validate = function(copied)

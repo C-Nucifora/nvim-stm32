@@ -19,10 +19,16 @@ describe("nvim-stm32 hardware operation commands", function()
     assert.equals(0, vim.fn.exists(":STM32Verify"))
 
     local completion = vim.api.nvim_get_commands({ builtin = false }).STM32Plan.complete
-    assert.same(
-      { "build", "clean", "rebuild", "analyze", "flash", "erase", "reset" },
-      completion()
-    )
+    assert.same({
+      "build",
+      "clean",
+      "rebuild",
+      "analyze",
+      "flash",
+      "erase",
+      "reset",
+      "monitor",
+    }, completion())
   end)
 end)
 

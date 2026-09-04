@@ -36,12 +36,25 @@ vim.api.nvim_create_user_command("STM32Reset", function()
   require("nvim-stm32.ui.operation").current("reset")
 end, { desc = "nvim-stm32: reset the selected target" })
 
+vim.api.nvim_create_user_command("STM32Monitor", function()
+  require("nvim-stm32.ui.monitor").current()
+end, { desc = "nvim-stm32: stream the selected UART serial device" })
+
 vim.api.nvim_create_user_command("STM32Plan", function(args)
   require("nvim-stm32.ui.plan").current(args.args ~= "" and args.args or "build")
 end, {
   nargs = "?",
   complete = function()
-    return { "build", "clean", "rebuild", "analyze", "flash", "erase", "reset" }
+    return {
+      "build",
+      "clean",
+      "rebuild",
+      "analyze",
+      "flash",
+      "erase",
+      "reset",
+      "monitor",
+    }
   end,
   desc = "nvim-stm32: preview an operation plan",
 })

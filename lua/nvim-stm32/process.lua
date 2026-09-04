@@ -37,7 +37,7 @@ local function command_options(command, opts)
   return {
     cwd = command.cwd or opts.cwd,
     env = env,
-    text = true,
+    text = command.lifecycle ~= "stream",
   }
 end
 
@@ -122,11 +122,21 @@ function M.run(commands, opts, callback)
   end
 
   local function cancel_active(reason, expected_child)
-    if finished or not active_child or state == "cancelling" then
+    if finished or state == "cancelling" then
       return false
     end
     if expected_child and active_child ~= expected_child then
       return false
+    end
+
+    if not active_child then
+      if state ~= "between_commands" then
+        return false
+      end
+      cancelled = true
+      state = "cancelling"
+      finish(0, 0, last_command)
+      return true
     end
 
     if reason == "timeout" then
@@ -196,6 +206,7 @@ function M.run(commands, opts, callback)
       end
       active_child = nil
       clear_child_timers()
+      state = commands[index + 1] and "between_commands" or "completing"
       local command_result = {
         argv = vim.deepcopy(command.argv),
         output = command_output,

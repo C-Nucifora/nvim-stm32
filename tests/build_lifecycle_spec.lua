@@ -231,9 +231,15 @@ describe("nvim-stm32 build lifecycle", function()
     assert.equals(2, vim.fn.exists(":STM32Clean"))
     assert.equals(2, vim.fn.exists(":STM32Rebuild"))
     local completion = vim.api.nvim_get_commands({ builtin = false }).STM32Plan.complete
-    assert.same(
-      { "build", "clean", "rebuild", "analyze", "flash", "erase", "reset" },
-      completion()
-    )
+    assert.same({
+      "build",
+      "clean",
+      "rebuild",
+      "analyze",
+      "flash",
+      "erase",
+      "reset",
+      "monitor",
+    }, completion())
   end)
 end)

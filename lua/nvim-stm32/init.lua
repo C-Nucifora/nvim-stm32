@@ -62,13 +62,16 @@ local function operation_module(kind)
   if kind == "flash" or kind == "erase" or kind == "reset" then
     return require("nvim-stm32.operations.flash")
   end
+  if kind == "monitor" then
+    return require("nvim-stm32.operations.monitor")
+  end
   if kind ~= "build" then
     return nil,
       require("nvim-stm32.model").error({
         code = "operation-kind-unsupported",
         message = "nvim-stm32: unsupported operation kind " .. tostring(kind),
         operation = tostring(kind),
-        hint = "use build, analyze, flash, erase, or reset",
+        hint = "use build, analyze, flash, erase, reset, or monitor",
       })
   end
 end

@@ -73,6 +73,62 @@ function M.tool_status(label, path, opt_key)
   return "warn", label .. " not found", advice
 end
 
+function M.monitor_status(cfg, opts)
+  opts = opts or {}
+  local devices = require("nvim-stm32.monitor.devices")
+  local platform = devices.platform(opts)
+  local supported = devices.pattern(platform) ~= nil
+  local statuses = {
+    supported and { level = "ok", message = "UART platform: " .. platform } or {
+      level = "warn",
+      message = "UART platform unsupported: " .. tostring(platform),
+    },
+  }
+
+  local exepath = opts.exepath or vim.fn.exepath
+  for _, name in ipairs({ "stty", "cat" }) do
+    local level, message = M.tool_status(name, exepath(name), nil)
+    statuses[#statuses + 1] = { level = level, message = message }
+  end
+
+  local configured = cfg.monitor and cfg.monitor.device or nil
+  if not configured then
+    statuses[#statuses + 1] = {
+      level = "info",
+      message = "configured UART device: none",
+    }
+  elseif not supported then
+    statuses[#statuses + 1] = {
+      level = "warn",
+      message = "configured UART device unavailable: " .. configured,
+    }
+  elseif devices.validate(configured, opts) then
+    statuses[#statuses + 1] = {
+      level = "ok",
+      message = "configured UART device: " .. configured,
+    }
+  else
+    statuses[#statuses + 1] = {
+      level = "warn",
+      message = "configured UART device unavailable: " .. configured,
+    }
+  end
+
+  local candidates, candidates_err
+  if supported then
+    candidates, candidates_err = devices.list(opts)
+  else
+    candidates_err = true
+  end
+  statuses[#statuses + 1] = {
+    level = "info",
+    message = candidates_err and "UART candidates: unavailable"
+      or #candidates == 0 and "UART candidates: none"
+      or "UART candidates: " .. table.concat(candidates, ", "),
+  }
+  return statuses
+end
+
 --- Render one tool_status verdict.
 ---@param label string
 ---@param path string|nil
@@ -164,6 +220,17 @@ function M.check()
     h.info("flash_backend pinned to " .. cfg.flash_backend)
   else
     h.info("flash probe order: " .. table.concat(cfg.flash_order, ", "))
+  end
+
+  h.start("nvim-stm32: UART monitor")
+  for _, status in ipairs(M.monitor_status(cfg)) do
+    if status.level == "ok" then
+      h.ok(status.message)
+    elseif status.level == "warn" then
+      h.warn(status.message)
+    else
+      h.info(status.message)
+    end
   end
 
   h.start("nvim-stm32: debug")
