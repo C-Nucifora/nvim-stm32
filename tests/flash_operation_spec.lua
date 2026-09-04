@@ -980,10 +980,13 @@ printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
     local source = project(root, { image(root, "application") })
     local elf = artifact(root, "application", "elf", "build-configured")
     session.record(root, build_result({ elf }, "build-configured"))
-    local programmer = executable(root, "configured-programmer")
+    local setup_root = root .. "/configured"
+    local programmer = executable(setup_root, "configured-programmer")
+    local objdump_path = executable(setup_root, "arm-none-eabi-objdump")
     nvim_stm32.setup({
       flash_backend = "cubeprogrammer",
       programmer_path = programmer,
+      toolchain_path = setup_root .. "/tools",
     })
     local hardware_plan
     operation.execute = function(plan, _, _, callback)
@@ -1000,7 +1003,12 @@ printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
     }, function() end)
 
     assert.equals("cubeprogrammer", hardware_plan.metadata.backend)
-    assert.equals(programmer, hardware_plan.metadata.tools.program)
+    assert.same({
+      program = programmer,
+      identify = programmer,
+      list = programmer,
+    }, hardware_plan.metadata.tools)
+    assert.equals(objdump_path, hardware_plan.metadata.elf_commands[1].argv[1])
   end)
 
   it(
