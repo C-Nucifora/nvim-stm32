@@ -238,6 +238,7 @@ describe("nvim-stm32 operation execution", function()
   local original_process_run
   local original_process_system
   local original_executable
+  local original_path
 
   before_each(function()
     root = vim.fn.tempname()
@@ -247,12 +248,14 @@ describe("nvim-stm32 operation execution", function()
     original_process_run = process.run
     original_process_system = process.system
     original_executable = vim.fn.executable
+    original_path = vim.env.PATH
   end)
 
   after_each(function()
     process.run = original_process_run
     process.system = original_process_system
     vim.fn.executable = original_executable
+    vim.env.PATH = original_path
     session.clear()
     vim.fn.delete(root, "rf")
   end)
@@ -268,7 +271,7 @@ describe("nvim-stm32 operation execution", function()
       assert.equals(1, vim.fn.filereadable(planned.metadata.file_api.query_path))
       assert.same(snapshot.commands, commands)
       assert.equals(root, opts.cwd)
-      assert.equals("/toolchain:", opts.env.PATH:sub(1, #"/toolchain:"))
+      assert.equals("/toolchain", opts.toolchain_path)
       write_reply(root, "app")
       callback({
         code = 0,
@@ -314,10 +317,13 @@ describe("nvim-stm32 operation execution", function()
     assert.equals("cmake", received[1].argv[1])
   end)
 
-  it("keeps the toolchain prefix after each command environment is merged", function()
+  it("prefixes the toolchain once for command-local and inherited PATH", function()
     local planned = assert(build.plan(project(root), { configuration = "Debug" }))
     planned.commands[1].env = { PATH = "/configure-path" }
-    planned.commands[2].env = { PATH = "/build-path" }
+    vim.env.PATH = "/inherited-path"
+    vim.fn.executable = function()
+      return 1
+    end
     write_reply(root, "app")
     local paths = {}
     local result
@@ -336,7 +342,7 @@ describe("nvim-stm32 operation execution", function()
 
     assert.same({
       "/toolchain:/configure-path",
-      "/toolchain:/build-path",
+      "/toolchain:/inherited-path",
     }, paths)
     assert.is_true(result.ok, vim.inspect(result))
   end)

@@ -3,7 +3,6 @@ local file_api = require("nvim-stm32.build.file_api")
 local model = require("nvim-stm32.model")
 local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
-local tools = require("nvim-stm32.tools")
 
 local M = {}
 
@@ -217,10 +216,9 @@ function M.run(plan, opts, callback)
     vim.deepcopy(require("nvim-stm32").get_config()),
     vim.deepcopy(opts)
   )
-  local env = vim.tbl_extend("force", {}, opts.env or {}, tools.env(cfg))
   local process_opts = {
     cwd = copied.metadata.project.root,
-    env = env,
+    env = vim.tbl_extend("force", {}, opts.env or {}),
     toolchain_path = cfg.toolchain_path,
     on_output = opts.on_output,
     max_output_bytes = opts.max_output_bytes,
