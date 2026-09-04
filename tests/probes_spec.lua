@@ -17,11 +17,11 @@ describe("nvim-stm32 passive probe enumeration", function()
   local old_output
   local old_path
 
-  local function fake_executable(name)
+  local function fake_executable(name, record_path)
     local path = directory .. "/" .. name
     vim.fn.writefile({
       "#!/bin/sh",
-      [[printf '%s\n' "$0" "$@" > "$NVIM_STM32_TEST_ARGV"]],
+      [[printf '%s\n' "$0" "$@" > ]] .. vim.fn.shellescape(record_path or argv_path),
       [[printf '%s' "$NVIM_STM32_TEST_OUTPUT"]],
     }, path)
     vim.uv.fs_chmod(path, 493)
@@ -86,6 +86,28 @@ describe("nvim-stm32 passive probe enumeration", function()
     assert.equals("V3J15M7", listed[1].firmware)
     assert.equals("066DFF515450657867190941", listed[2].serial)
     assert.equals("V2J45S7", listed[2].firmware)
+  end)
+
+  it("prefers CubeProgrammer when both passive enumerators are available", function()
+    local programmer = fake_executable("STM32_Programmer_CLI")
+    local stinfo_argv_path = directory .. "/st-info-argv"
+    fake_executable("st-info", stinfo_argv_path)
+    vim.env.NVIM_STM32_TEST_OUTPUT = [[
+  Device Index           : 1
+  ST-LINK SN             : 003F002A3138510E34383839
+  ST-LINK FW             : V3J15M7
+]]
+
+    local listed, err = enumerate({
+      programmer_path = programmer,
+      stlink_path = directory .. "/st-flash",
+      flash_backend = "openocd",
+    })
+
+    assert.is_nil(err)
+    assert.equals("003F002A3138510E34383839", listed[1].serial)
+    assert.same({ programmer, "-l", "st-link-only" }, vim.fn.readfile(argv_path))
+    assert.equals(0, vim.fn.filereadable(stinfo_argv_path))
   end)
 
   it("falls back to the passive st-info probe argv", function()
