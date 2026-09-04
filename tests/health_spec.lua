@@ -234,6 +234,20 @@ describe("nvim-stm32.health.check", function()
     assert.equals(0, process_runs)
     vim.cmd("bwipeout!")
   end)
+
+  it("states the passive software boundary without touching hardware", function()
+    vim.cmd("checkhealth nvim-stm32")
+    local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+
+    assert.matches(
+      "no probe connection, reset, erase, or program command",
+      out,
+      1,
+      true
+    )
+    assert.matches("NUCLEO%-F429ZI hardware validation remains", out)
+    vim.cmd("bwipeout!")
+  end)
 end)
 
 describe("nvim-stm32.health project section", function()

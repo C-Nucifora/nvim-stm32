@@ -233,6 +233,12 @@ function M.check()
     end
   end
 
+  h.start("nvim-stm32: hardware boundary")
+  h.info(
+    "health is passive: no probe connection, reset, erase, or program command is run"
+  )
+  h.info("NUCLEO-F429ZI hardware validation remains a separate connected-board gate")
+
   h.start("nvim-stm32: debug")
   report_tool("arm-none-eabi-gdb", tools.gdb(cfg), "gdb_path")
 
