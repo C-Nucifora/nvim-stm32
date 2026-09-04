@@ -55,6 +55,38 @@ function M.check()
     h.error("Windows is not supported; nvim-stm32 targets macOS and Linux")
   end
 
+  h.start("nvim-stm32: detected project")
+  local previous = vim.fn.bufname("#")
+  local start = previous ~= ""
+      and previous ~= "health://"
+      and vim.fn.fnamemodify(previous, ":p:h")
+    or nil
+  local target, detection_error = require("nvim-stm32.detect").target(start)
+  if not target then
+    h.info(detection_error)
+  else
+    h.ok("project: " .. target.root)
+    h.info("build backend: " .. (target.build_backend or "none in this directory"))
+    if target.mcu then
+      local report = target.confidence == "exact" and h.ok or h.warn
+      report(
+        ("MCU: %s (%s, %d of %d signals agree)"):format(
+          target.mcu,
+          target.confidence,
+          target.agreement,
+          #target.signals
+        )
+      )
+      if target.board then
+        h.info("board: " .. target.board)
+      end
+    else
+      h.warn("MCU not resolved; family-specific features are off", {
+        "Add a CubeMX .ioc, a startup file or a named linker script to the project.",
+      })
+    end
+  end
+
   h.start("nvim-stm32: build tools")
   if cfg.toolchain_path then
     h.info("toolchain_path: " .. cfg.toolchain_path)

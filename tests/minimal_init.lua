@@ -7,6 +7,7 @@ local here =
 local root = vim.fn.fnamemodify(here, ":h")
 
 vim.opt.runtimepath:prepend(root)
+vim.cmd("runtime plugin/nvim-stm32.lua")
 
 local function add(path)
   if path ~= "" and vim.fn.isdirectory(path) == 1 then
