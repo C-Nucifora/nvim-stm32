@@ -1,6 +1,7 @@
 local float = require("nvim-stm32.ui.float")
 local process = require("nvim-stm32.process")
 local tools = require("nvim-stm32.tools")
+local artifacts = require("nvim-stm32.discover.artifacts")
 
 local M = {}
 
@@ -48,26 +49,77 @@ end
 
 function M.find_elf(target, opts)
   opts = opts or {}
-  local search_root = target.root .. "/build"
-  if target.build_backend == "cmake_presets" then
-    if not opts.preset then
-      return nil, "nvim-stm32: preset is required to find the built .elf"
+  local image_id = target.image_id or opts.image_id
+  local found
+
+  if opts.artifacts then
+    if not image_id then
+      return nil, "nvim-stm32: image id is required to select a built .elf"
     end
-    search_root = search_root .. "/" .. opts.preset
+    found = artifacts.for_image(opts.artifacts, image_id, "elf")
+  elseif opts.project and opts.configuration then
+    local all, artifact_err
+    if opts.reply then
+      all, artifact_err = artifacts.from_cmake(
+        opts.project,
+        opts.configuration,
+        opts.reply,
+        opts.build_id
+      )
+    else
+      all, artifact_err =
+        artifacts.from_tree(opts.project, opts.configuration, opts.build_id)
+    end
+    if not all then
+      return nil, artifacts.format_error(artifact_err)
+    end
+    if not image_id and #opts.project.images == 1 then
+      image_id = opts.project.images[1].id
+    end
+    if not image_id then
+      return nil, "nvim-stm32: image id is required to select a built .elf"
+    end
+    found = artifacts.for_image(all, image_id, "elf")
+  else
+    local search_root = target.root .. "/build"
+    if target.build_backend == "cmake_presets" then
+      if not opts.preset then
+        return nil, "nvim-stm32: preset is required to find the built .elf"
+      end
+      search_root = search_root .. "/" .. opts.preset
+    end
+    image_id = image_id or "legacy"
+    local all, artifact_err = artifacts.from_tree({
+      images = {
+        {
+          id = image_id,
+          build_target = target.build_target,
+        },
+      },
+    }, {
+      name = opts.preset or "default",
+      binary_dir = search_root,
+    }, opts.build_id)
+    if not all then
+      if artifact_err.code == "artifact-missing" then
+        return nil, "nvim-stm32: no .elf found under " .. search_root
+      end
+      return nil, artifacts.format_error(artifact_err)
+    end
+    found = artifacts.for_image(all, image_id, "elf")
   end
 
-  local files = vim.fs.find(function(name)
-    return name:sub(-4):lower() == ".elf"
-  end, { path = search_root, type = "file", limit = 2 })
-  table.sort(files)
-
-  if #files == 0 then
-    return nil, "nvim-stm32: no .elf found under " .. search_root
+  if #found == 0 then
+    return nil, "nvim-stm32: no .elf found for image " .. image_id
   end
-  if #files > 1 then
-    return nil, "nvim-stm32: multiple .elf files found: " .. table.concat(files, ", ")
+  if #found > 1 then
+    local paths = {}
+    for _, artifact in ipairs(found) do
+      paths[#paths + 1] = artifact.path
+    end
+    return nil, "nvim-stm32: multiple .elf files found: " .. table.concat(paths, ", ")
   end
-  return files[1]
+  return found[1].path
 end
 
 local function report_error(presenter, result, err)

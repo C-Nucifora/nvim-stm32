@@ -115,6 +115,34 @@ describe("nvim-stm32 ELF discovery", function()
     assert.matches("one.elf", err, 1, true)
     assert.matches("two.elf", err, 1, true)
   end)
+
+  it("uses selected-image artifacts when they are supplied", function()
+    vim.fn.writefile({ "app" }, root .. "/build/app.elf")
+    vim.fn.writefile({ "other" }, root .. "/build/other.elf")
+
+    assert.equals(
+      root .. "/build/app.elf",
+      (
+        build.find_elf(
+          { root = root, build_backend = "make", image_id = "application" },
+          {
+            artifacts = {
+              {
+                image_id = "application",
+                kind = "elf",
+                path = root .. "/build/app.elf",
+              },
+              {
+                image_id = "other",
+                kind = "elf",
+                path = root .. "/build/other.elf",
+              },
+            },
+          }
+        )
+      )
+    )
+  end)
 end)
 
 describe("nvim-stm32 build execution", function()

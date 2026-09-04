@@ -7,7 +7,7 @@
     "build": "/placeholder/build"
   },
   "artifacts": [
-    { "path": "app.elf" }
+    { "path": "/placeholder/build/app.elf" }
   ],
   "link": {
     "commandFragments": [
