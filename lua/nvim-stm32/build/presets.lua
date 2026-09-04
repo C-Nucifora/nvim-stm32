@@ -195,6 +195,7 @@ function M.configurations(root)
           name = build.name,
           configure_preset = configure_name,
           build_preset = build.name,
+          file_api_configuration = build.configuration,
           binary_dir = binary_dir(root, configure),
         })
         paired[configure_name] = true

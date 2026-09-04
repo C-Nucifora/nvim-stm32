@@ -19,6 +19,27 @@ describe("nvim-stm32 CMake preset resolution", function()
     }, configs)
   end)
 
+  it("retains a build preset's File API configuration", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({
+      [[{"configurePresets":[{"name":"host-debug","binaryDir":"${sourceDir}/build/${presetName}"}],"buildPresets":[{"name":"host-debug","configurePreset":"host-debug","configuration":"Debug"}]}]],
+    }, root .. "/CMakePresets.json")
+
+    local configs = assert(presets.configurations(root))
+
+    assert.same({
+      {
+        name = "host-debug",
+        configure_preset = "host-debug",
+        build_preset = "host-debug",
+        file_api_configuration = "Debug",
+        binary_dir = root .. "/build/host-debug",
+      },
+    }, configs)
+    vim.fn.delete(root, "rf")
+  end)
+
   it("uses CMake build presets instead of assuming a build slash preset", function()
     local command = presets.build_command({ root = "/fw" }, {
       name = "Debug",

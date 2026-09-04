@@ -75,6 +75,7 @@ function M.configuration(spec)
   required_string("configuration.name", out.name)
   required_string("configuration.configure_preset", out.configure_preset)
   optional_string("configuration.build_preset", out.build_preset)
+  optional_string("configuration.file_api_configuration", out.file_api_configuration)
   required_string("configuration.binary_dir", out.binary_dir)
   out.binary_dir = vim.fs.normalize(out.binary_dir)
   return out

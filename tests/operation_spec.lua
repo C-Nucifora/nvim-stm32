@@ -9,14 +9,18 @@ local function write_json(path, value)
   vim.fn.writefile({ vim.json.encode(value) }, path)
 end
 
-local function preset_document(root, names)
+local function preset_document(root, names, file_api_configurations)
   local configure, builds = {}, {}
   for _, name in ipairs(names) do
     configure[#configure + 1] = {
       name = name,
       binaryDir = "${sourceDir}/build/${presetName}",
     }
-    builds[#builds + 1] = { name = name, configurePreset = name }
+    builds[#builds + 1] = {
+      name = name,
+      configurePreset = name,
+      configuration = file_api_configurations and file_api_configurations[name] or nil,
+    }
   end
   write_json(root .. "/CMakePresets.json", {
     version = 3,
@@ -75,8 +79,8 @@ local function write_reply(root, target_name)
   })
 end
 
-local function write_multi_configuration_reply(root, target_name)
-  local binary = root .. "/build/Debug"
+local function write_multi_configuration_reply(root, target_name, binary_name)
+  local binary = root .. "/build/" .. (binary_name or "Debug")
   local replies = binary .. "/.cmake/api/v1/reply"
   vim.fn.mkdir(replies, "p")
   vim.fn.mkdir(binary .. "/Debug", "p")
@@ -380,6 +384,62 @@ describe("nvim-stm32 operation execution", function()
     assert.equals(1, #result.artifacts)
     assert.equals(root .. "/build/Debug/Debug/app.elf", result.elf)
   end)
+
+  it("uses the build preset's File API configuration", function()
+    preset_document(root, { "host-debug" }, { ["host-debug"] = "Debug" })
+    local planned = assert(build.plan(project(root), { configuration = "host-debug" }))
+    local result
+
+    process.run = function(commands, _, callback)
+      write_multi_configuration_reply(root, "app", "host-debug")
+      callback({
+        code = 0,
+        signal = 0,
+        output = "built",
+        command = commands[2].argv,
+        started_ns = 10,
+        ended_ns = 20,
+      })
+      return { id = 11 }
+    end
+
+    operation.run(planned, {}, function(value)
+      result = value
+    end)
+
+    assert.is_true(result.ok, vim.inspect(result))
+    assert.equals(1, #result.artifacts)
+    assert.equals(root .. "/build/host-debug/Debug/app.elf", result.elf)
+  end)
+
+  it(
+    "does not use a multi-config File API reply without the planned configuration",
+    function()
+      preset_document(root, { "Debug", "Profile" })
+      local planned = assert(build.plan(project(root), { configuration = "Profile" }))
+      local result
+
+      process.run = function(commands, _, callback)
+        write_multi_configuration_reply(root, "app", "Profile")
+        callback({
+          code = 0,
+          signal = 0,
+          output = "built",
+          command = commands[2].argv,
+          started_ns = 10,
+          ended_ns = 20,
+        })
+        return { id = 11 }
+      end
+
+      operation.run(planned, {}, function(value)
+        result = value
+      end)
+
+      assert.is_false(result.ok)
+      assert.equals("artifact-missing", result.error.code)
+    end
+  )
 
   it("deep-copies a plan before handing commands to the process manager", function()
     local planned = assert(build.plan(project(root), { configuration = "Debug" }))

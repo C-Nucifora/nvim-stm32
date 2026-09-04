@@ -71,14 +71,18 @@ local function selected_reply(plan, reply)
   end
   local targets = reply.targets or {}
   if type(reply.configurations) == "table" then
-    for _, configuration in ipairs(reply.configurations) do
-      if configuration.name == plan.metadata.configuration.name then
-        targets = configuration.targets or {}
-        break
-      end
-    end
-    if #reply.configurations == 1 and targets == reply.targets then
+    local configuration_name = plan.metadata.configuration.file_api_configuration
+      or plan.metadata.configuration.name
+    if #reply.configurations == 1 then
       targets = reply.configurations[1].targets or {}
+    else
+      targets = {}
+      for _, configuration in ipairs(reply.configurations) do
+        if configuration.name == configuration_name then
+          targets = configuration.targets or {}
+          break
+        end
+      end
     end
   end
   return {
