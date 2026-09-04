@@ -33,7 +33,13 @@ function M.run(commands, opts, callback)
       end
       chunks[#chunks + 1] = chunk
       if opts.on_output then
-        opts.on_output(chunk)
+        if vim.in_fast_event() then
+          vim.schedule(function()
+            opts.on_output(chunk)
+          end)
+        else
+          opts.on_output(chunk)
+        end
       end
     end
 
