@@ -184,4 +184,32 @@ describe("nvim-stm32 project discovery", function()
     assert.equals("CM4", found[1].image_hint)
     vim.fn.delete(tmp, "rf")
   end)
+
+  it(
+    "does not promote CM4 from nested CM7 evidence outside its sibling layout",
+    function()
+      local tmp = vim.fn.tempname()
+      vim.fn.mkdir(tmp .. "/.git", "p")
+      write(tmp .. "/CMakePresets.json", { "{}" })
+      write(tmp .. "/CM4/app.ioc", { "Mcu.Name=STM32H747XIHx" })
+      write(tmp .. "/examples/CM7/app.ioc", { "Mcu.Name=STM32H747XIHx" })
+
+      local resolved = assert(project.resolve(tmp .. "/CM4"))
+      assert.equals(tmp .. "/CM4", resolved.root)
+      vim.fn.delete(tmp, "rf")
+    end
+  )
+
+  it("does not inherit external CPU flags for a single CMake MCU match", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CM4/CMakeLists.txt", { "add_compile_definitions(STM32H747xx)" })
+    write(tmp .. "/toolchain.cmake", { "add_compile_options(-mcpu=cortex-m7)" })
+
+    local found = vim.tbl_filter(function(signal)
+      return signal.source == "cmake"
+    end, signals.collect(tmp))
+    assert.is_nil(found[1].core)
+    assert.equals("CM4", found[1].image_hint)
+    vim.fn.delete(tmp, "rf")
+  end)
 end)

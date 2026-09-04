@@ -15,13 +15,8 @@ local function multi_image_preset(dir)
   if not vim.uv.fs_stat(preset) then
     return nil, nil, nil
   end
-  local hints = {}
-  for _, signal in ipairs(signals.collect(parent)) do
-    if signal.confidence == "exact" and signal.image_hint then
-      hints[signal.image_hint] = true
-    end
-  end
-  if hints.CM4 and hints.CM7 then
+  local sibling = parent .. "/" .. (image_id == "CM4" and "CM7" or "CM4")
+  if #vim.fn.glob(sibling .. "/*.ioc", false, true) > 0 then
     return parent, "cmake_presets", preset
   end
   return nil, nil, nil

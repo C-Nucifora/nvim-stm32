@@ -182,7 +182,6 @@ local function append_linker_signals(out, root)
 end
 
 local function append_cmake_signals(out, root)
-  local _, aggregate_core, aggregate_fpu = M.scan_cmake(root)
   local matches = {}
   for _, path in ipairs(cmake_files(root)) do
     local mcus, core, fpu, build_target = read_cmake(path)
@@ -203,15 +202,10 @@ local function append_cmake_signals(out, root)
       mcu = match.mcu,
       confidence = "inferred",
       board = nil,
-      core = match.core or (#matches == 1 and aggregate_core or nil),
-      fpu = match.fpu or (#matches == 1 and aggregate_fpu or nil),
+      core = match.core,
+      fpu = match.fpu,
       build_target = match.build_target,
-      image_hint = image_hint(
-        root,
-        match.file,
-        match.core or (#matches == 1 and aggregate_core or nil),
-        match.build_target
-      ),
+      image_hint = image_hint(root, match.file, match.core, match.build_target),
     }
   end
 end
@@ -284,6 +278,11 @@ function M.mcu(root)
     board = board or signal.board
     core = core or signal.core
     fpu = fpu or signal.fpu
+  end
+  if not core or not fpu then
+    local _, cmake_core, cmake_fpu = M.scan_cmake(root)
+    core = core or cmake_core
+    fpu = fpu or cmake_fpu
   end
 
   return {
