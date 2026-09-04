@@ -4,9 +4,8 @@ Build, flash, erase, monitor and debug STM32 projects from Neovim. The plugin
 detects the project and the chip itself, so there is nothing to configure per
 firmware folder.
 
-**Status: under construction.** Detection, `:STM32Info`, and
-`:checkhealth nvim-stm32` work. Build, flash, monitor, and debug are not wired
-up yet.
+**Status: under construction.** Detection, `:STM32Info`, `:STM32Build`, and
+`:checkhealth nvim-stm32` work. Flash, monitor, and debug are not wired up yet.
 
 ## What it detects
 
@@ -19,6 +18,15 @@ signal and the number that agree.
 Detection starts from the buffer because a course repository or monorepo can
 hold several independent firmware folders. The directory where Neovim started
 does not identify one of them.
+
+## Commands
+
+- `:STM32Info` shows the detected project, chip, board, and supporting signals.
+- `:STM32Build` configures and builds the current firmware. CMake preset
+  projects offer their visible presets; plain CMake and Make projects run
+  directly. Successful builds resolve the sole `.elf` artifact for later
+  flash and debug commands.
+- `:checkhealth nvim-stm32` reports project detection and tool availability.
 
 ## Requirements
 
