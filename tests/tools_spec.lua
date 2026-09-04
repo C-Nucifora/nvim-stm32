@@ -31,8 +31,13 @@ describe("nvim-stm32.tools.resolve", function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir .. "/2.23.0/bin", "p")
     vim.fn.mkdir(dir .. "/2.9.0/bin", "p")
+    vim.fn.mkdir(dir .. "/2.10.0/bin", "p")
     exe = dir .. "/2.23.0/bin/FakeProgrammer"
-    for _, v in ipairs({ "2.23.0", "2.9.0" }) do
+    -- 2.10.0 sorts first alphabetically ("2.1..." < "2.2..." < "2.9...") but
+    -- is not the newest version, so this fixture only resolves to 2.23.0 when
+    -- resolve() actually applies the numeric sort rather than trusting glob's
+    -- alphabetical order.
+    for _, v in ipairs({ "2.23.0", "2.9.0", "2.10.0" }) do
       local p = dir .. "/" .. v .. "/bin/FakeProgrammer"
       vim.fn.writefile({ "#!/bin/sh" }, p)
       vim.uv.fs_chmod(p, 493) -- 0755
