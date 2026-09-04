@@ -135,4 +135,53 @@ describe("nvim-stm32 project discovery", function()
     assert.equals("ambiguous-images", resolved.provenance.warnings[1].code)
     vim.fn.delete(tmp, "rf")
   end)
+
+  it("collects every device macro from one CMake file", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakeLists.txt", {
+      "add_compile_definitions(STM32H747xx STM32H743xx)",
+      "add_compile_options(-mcpu=cortex-m7)",
+    })
+
+    local found = vim.tbl_filter(function(signal)
+      return signal.source == "cmake"
+    end, signals.collect(tmp))
+    assert.same(
+      { "STM32H743xx", "STM32H747xx" },
+      vim.tbl_map(function(signal)
+        return signal.mcu
+      end, found)
+    )
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("does not absorb an unrelated .ioc sibling into a dual-image project", function()
+    local tmp = vim.fn.tempname()
+    vim.fn.mkdir(tmp .. "/.git", "p")
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/CM4/app.ioc", { "Mcu.Name=STM32H747XIHx", "Mcu.UserName=chip_CM4" })
+    write(tmp .. "/CM7/app.ioc", { "Mcu.Name=STM32H747XIHx", "Mcu.UserName=chip_CM7" })
+    write(tmp .. "/unrelated/app.ioc", { "Mcu.Name=STM32F429ZITx" })
+
+    local resolved = assert(project.resolve(tmp .. "/unrelated"))
+    assert.equals(tmp .. "/unrelated", resolved.root)
+    assert.equals("application", resolved.images[1].id)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("keeps a CM4 CMake signal local when another file measures CM7", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CM4/CMakeLists.txt", { "add_compile_definitions(STM32H747xx)" })
+    write(tmp .. "/other/CMakeLists.txt", {
+      "add_compile_definitions(STM32H747xx)",
+      "add_compile_options(-mcpu=cortex-m7)",
+    })
+
+    local found = vim.tbl_filter(function(signal)
+      return signal.source == "cmake" and signal.file:find("/CM4/", 1, true)
+    end, signals.collect(tmp))
+    assert.is_nil(found[1].core)
+    assert.equals("CM4", found[1].image_hint)
+    vim.fn.delete(tmp, "rf")
+  end)
 end)

@@ -56,7 +56,13 @@ local function read_cmake(path)
   end
   local contents = file:read("*a")
   file:close()
-  return contents:match("(STM32%u%d[%u%d]+[Xx][Xx])%f[^%w_]"),
+  local mcus = {}
+  for mcu in contents:gmatch("(STM32%u%d[%u%d]+[Xx][Xx])%f[^%w_]") do
+    if targets.parse(mcu) then
+      mcus[#mcus + 1] = mcu
+    end
+  end
+  return mcus,
     contents:match("%-mcpu=([%w%-%.]+)"),
     contents:match("%-mfpu=([%w%-%.]+)"),
     contents:match("add_executable%s*%(%s*([%w_%-]+)") or contents:match(
@@ -105,9 +111,9 @@ end
 function M.scan_cmake(root)
   local mcu, core, fpu, source
   for _, path in ipairs(cmake_files(root)) do
-    local hit, found_core, found_fpu = read_cmake(path)
-    if not mcu and hit and targets.parse(hit) then
-      mcu, source = hit, path
+    local hits, found_core, found_fpu = read_cmake(path)
+    if not mcu and hits[1] then
+      mcu, source = hits[1], path
     end
     core = core or found_core
     fpu = fpu or found_fpu
@@ -179,8 +185,8 @@ local function append_cmake_signals(out, root)
   local _, aggregate_core, aggregate_fpu = M.scan_cmake(root)
   local matches = {}
   for _, path in ipairs(cmake_files(root)) do
-    local mcu, core, fpu, build_target = read_cmake(path)
-    if mcu and targets.parse(mcu) then
+    local mcus, core, fpu, build_target = read_cmake(path)
+    for _, mcu in ipairs(mcus) do
       matches[#matches + 1] = {
         mcu = mcu,
         core = core,
@@ -197,13 +203,13 @@ local function append_cmake_signals(out, root)
       mcu = match.mcu,
       confidence = "inferred",
       board = nil,
-      core = match.core or aggregate_core,
-      fpu = match.fpu or aggregate_fpu,
+      core = match.core or (#matches == 1 and aggregate_core or nil),
+      fpu = match.fpu or (#matches == 1 and aggregate_fpu or nil),
       build_target = match.build_target,
       image_hint = image_hint(
         root,
         match.file,
-        match.core or aggregate_core,
+        match.core or (#matches == 1 and aggregate_core or nil),
         match.build_target
       ),
     }
@@ -219,7 +225,8 @@ function M.collect(project_root)
   table.sort(out, function(a, b)
     local a_precedence = precedence[a.source]
     local b_precedence = precedence[b.source]
-    return a_precedence == b_precedence and a.file < b.file
+    return a_precedence == b_precedence
+        and (a.file < b.file or a.file == b.file and a.mcu < b.mcu)
       or a_precedence < b_precedence
   end)
   return out

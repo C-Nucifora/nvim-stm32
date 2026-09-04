@@ -5,31 +5,24 @@ local targets = require("nvim-stm32.targets")
 
 local M = {}
 
-local function enclosing_multi_image_preset(dir)
-  local git = vim.fs.find(".git", { path = dir, upward = true, limit = 1 })[1]
-  local stop = git and vim.fs.dirname(git) or nil
-  local current = vim.fs.dirname(dir)
-  while current and current ~= "" do
-    local marker = current .. "/CMakePresets.json"
-    if vim.uv.fs_stat(marker) then
-      local hints = {}
-      for _, signal in ipairs(signals.collect(current)) do
-        if signal.confidence == "exact" and signal.image_hint then
-          hints[signal.image_hint] = true
-        end
-      end
-      if vim.tbl_count(hints) > 1 then
-        return current, "cmake_presets", marker
-      end
+local function multi_image_preset(dir)
+  local image_id = vim.fs.basename(dir):upper()
+  if image_id ~= "CM4" and image_id ~= "CM7" then
+    return nil, nil, nil
+  end
+  local parent = vim.fs.dirname(dir)
+  local preset = parent .. "/CMakePresets.json"
+  if not vim.uv.fs_stat(preset) then
+    return nil, nil, nil
+  end
+  local hints = {}
+  for _, signal in ipairs(signals.collect(parent)) do
+    if signal.confidence == "exact" and signal.image_hint then
+      hints[signal.image_hint] = true
     end
-    if current == stop then
-      break
-    end
-    local parent = vim.fs.dirname(current)
-    if parent == current then
-      break
-    end
-    current = parent
+  end
+  if hints.CM4 and hints.CM7 then
+    return parent, "cmake_presets", preset
   end
   return nil, nil, nil
 end
@@ -123,8 +116,7 @@ function M.resolve(dir)
   end
 
   if marker:match("%.ioc$") then
-    local multi_root, multi_adapter, multi_marker =
-      enclosing_multi_image_preset(project_root)
+    local multi_root, multi_adapter, multi_marker = multi_image_preset(project_root)
     if multi_root then
       project_root, adapter, marker = multi_root, multi_adapter, multi_marker
     end
