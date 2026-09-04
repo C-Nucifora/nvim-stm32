@@ -1,6 +1,6 @@
 # Neovim-native STM32 suite design
 
-Date: 2026-09-04  
+Date: 2026-09-04
 Status: approved in conversation, awaiting review of this written spec
 
 ## Decision
