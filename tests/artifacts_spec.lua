@@ -95,6 +95,51 @@ describe("nvim-stm32 artifact discovery", function()
     assert.equals("op-2", found[1].build_id)
   end)
 
+  it("uses the executable name as an implicit CMake build target", function()
+    local implicit_project = project(root, { image("application") })
+    local found = assert(
+      artifacts.from_cmake(implicit_project, config, single_target_reply, "op-implicit")
+    )
+
+    assert.equals("app", found[1].build_target)
+  end)
+
+  it("finds uppercase sibling artifact extensions", function()
+    local uppercase_project = project(root, { image("application", "caps") })
+    write(root .. "/build/Debug/caps.ELF")
+    write(root .. "/build/Debug/caps.HEX")
+    write(root .. "/build/Debug/caps.BIN")
+    write(root .. "/build/Debug/caps.MAP")
+    local original_stat = vim.uv.fs_stat
+    vim.uv.fs_stat = function(path, ...)
+      if
+        path:match("caps%.hex$")
+        or path:match("caps%.bin$")
+        or path:match("caps%.map$")
+      then
+        return nil
+      end
+      return original_stat(path, ...)
+    end
+    local ok, found_or_err = pcall(
+      artifacts.from_cmake,
+      uppercase_project,
+      config,
+      reply(root, { "caps" }),
+      "op-uppercase"
+    )
+    vim.uv.fs_stat = original_stat
+    assert.is_true(ok, found_or_err)
+    local found = found_or_err
+
+    assert.equals(4, #found)
+    local kinds = vim.tbl_map(function(artifact)
+      return artifact.kind
+    end, found)
+    table.sort(kinds)
+    assert.same({ "bin", "elf", "hex", "map" }, kinds)
+  end)
+
   it("does not guess between unmapped executable targets", function()
     local two_image_project = project(root, {
       image("core-0", "firmware-0"),
@@ -124,11 +169,11 @@ describe("nvim-stm32 artifact discovery", function()
     assert.equals("artifact-outside-binary-dir", err.code)
   end)
 
-  it("finds every tree artifact inside the selected binary directory", function()
+  it("does not assign unrelated tree executables to the sole image", function()
     write(root .. "/build/Debug/nested/boot.elf")
-    local found = assert(artifacts.from_tree(single_image_project, config, "op-5"))
+    local found, err = artifacts.from_tree(single_image_project, config, "op-5")
 
-    assert.equals(5, #found)
-    assert.equals("tree", found[1].provenance.source)
+    assert.is_nil(found)
+    assert.equals("artifact-ambiguous", err.code)
   end)
 end)

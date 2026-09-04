@@ -68,10 +68,10 @@ end
 local function add_artifact(
   found,
   seen,
-  root,
   root_real,
   config,
   image,
+  build_target,
   path,
   build_id,
   source
@@ -81,16 +81,20 @@ local function add_artifact(
     return nil, stat_or_err
   end
   local kind = kind_for(real)
-  if not kind or seen[real] then
+  local identity = real
+  if stat_or_err.dev and stat_or_err.ino then
+    identity = tostring(stat_or_err.dev) .. ":" .. tostring(stat_or_err.ino)
+  end
+  if not kind or seen[identity] then
     return true
   end
-  seen[real] = true
+  seen[identity] = true
   found[#found + 1] = model.artifact({
     image_id = image.id,
     kind = kind,
     path = real,
     configuration = config.name,
-    build_target = image.build_target or image.id,
+    build_target = build_target,
     modified_ns = modified_ns(stat_or_err),
     build_id = build_id,
     provenance = { source = source },
@@ -106,10 +110,10 @@ local function image_for_target(project, executables, target)
     end
   end
   if #matches == 1 then
-    return matches[1]
+    return matches[1], target.name
   end
   if #project.images == 1 and #executables == 1 then
-    return project.images[1]
+    return project.images[1], target.name
   end
   return nil,
     error(
@@ -132,10 +136,11 @@ function M.from_cmake(project, config, reply, build_id)
 
   local found, seen = {}, {}
   for _, target in ipairs(executables) do
-    local image, image_err = image_for_target(project, executables, target)
+    local image, build_target_or_err = image_for_target(project, executables, target)
     if not image then
-      return nil, image_err
+      return nil, build_target_or_err
     end
+    local build_target = build_target_or_err
     local elf_paths = {}
     for _, path in ipairs(target.artifacts or {}) do
       local real, path_err = existing_path(root_real, path, image.id)
@@ -158,10 +163,10 @@ function M.from_cmake(project, config, reply, build_id)
       local added, add_err = add_artifact(
         found,
         seen,
-        root,
         root_real,
         config,
         image,
+        build_target,
         elf,
         build_id,
         "cmake-file-api"
@@ -169,23 +174,30 @@ function M.from_cmake(project, config, reply, build_id)
       if not added then
         return nil, add_err
       end
-      local stem = elf:sub(1, -5)
-      for _, extension in ipairs({ ".hex", ".bin", ".map" }) do
-        local sibling = stem .. extension
-        if vim.uv.fs_stat(sibling) then
-          local sibling_added, sibling_err = add_artifact(
+      local directory = vim.fs.dirname(elf)
+      local stem = vim.fn.fnamemodify(elf, ":r")
+      local siblings = vim.fs.find(function(name)
+        return kind_for(name) ~= nil
+      end, { path = directory, type = "file", limit = math.huge })
+      table.sort(siblings)
+      for _, sibling in ipairs(siblings) do
+        if
+          vim.fs.dirname(sibling) == directory
+          and vim.fn.fnamemodify(sibling, ":r") == stem
+        then
+          local added, add_err = add_artifact(
             found,
             seen,
-            root,
             root_real,
             config,
             image,
+            build_target,
             sibling,
             build_id,
             "cmake-file-api"
           )
-          if not sibling_added then
-            return nil, sibling_err
+          if not added then
+            return nil, add_err
           end
         end
       end
@@ -197,7 +209,7 @@ function M.from_cmake(project, config, reply, build_id)
   return found
 end
 
-local function image_for_path(project, candidates, path)
+local function image_for_path(project, elf_stems, path)
   local stem = vim.fn.fnamemodify(vim.fn.fnamemodify(path, ":t"), ":r")
   local matches = {}
   for _, image in ipairs(project.images) do
@@ -206,10 +218,10 @@ local function image_for_path(project, candidates, path)
     end
   end
   if #matches == 1 then
-    return matches[1]
+    return matches[1], stem
   end
-  if #project.images == 1 and #candidates > 0 then
-    return project.images[1]
+  if #project.images == 1 and #elf_stems == 1 and stem == elf_stems[1] then
+    return project.images[1], stem
   end
   return nil,
     error("artifact-ambiguous", "cannot map artifact " .. stem .. " to an image")
@@ -228,14 +240,31 @@ function M.from_tree(project, config, build_id)
     return nil, error("artifact-missing", "no artifacts found under " .. root)
   end
 
+  local elf_stems = {}
+  for _, path in ipairs(paths) do
+    if kind_for(path) == "elf" then
+      elf_stems[#elf_stems + 1] =
+        vim.fn.fnamemodify(vim.fn.fnamemodify(path, ":t"), ":r")
+    end
+  end
+
   local found, seen = {}, {}
   for _, path in ipairs(paths) do
-    local image, image_err = image_for_path(project, paths, path)
+    local image, build_target_or_err = image_for_path(project, elf_stems, path)
     if not image then
-      return nil, image_err
+      return nil, build_target_or_err
     end
-    local added, add_err =
-      add_artifact(found, seen, root, root_real, config, image, path, build_id, "tree")
+    local added, add_err = add_artifact(
+      found,
+      seen,
+      root_real,
+      config,
+      image,
+      build_target_or_err,
+      path,
+      build_id,
+      "tree"
+    )
     if not added then
       return nil, add_err
     end

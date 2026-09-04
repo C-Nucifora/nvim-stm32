@@ -111,9 +111,7 @@ describe("nvim-stm32 ELF discovery", function()
 
     local elf, err = build.find_elf({ root = root, build_backend = "make" }, {})
     assert.is_nil(elf)
-    assert.matches("multiple .elf", err, 1, true)
-    assert.matches("one.elf", err, 1, true)
-    assert.matches("two.elf", err, 1, true)
+    assert.matches("cannot map artifact", err, 1, true)
   end)
 
   it("uses selected-image artifacts when they are supplied", function()
