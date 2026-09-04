@@ -229,8 +229,11 @@ shared memory, core-specific views, or discontinuous regions.
 
 ### Artifact
 
-Each artifact records what produced it. This prevents a stale ELF from another
-preset or core from being flashed.
+Each artifact records what produced it. This prevents an ELF from another preset
+or core from being flashed. A successful no-op build may leave the file timestamp
+unchanged, so freshness means the plugin validated the artifact after the last
+successful build operation for that configuration. It does not require a newer
+timestamp.
 
 ```lua
 Artifact = {
