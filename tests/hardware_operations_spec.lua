@@ -761,3 +761,23 @@ describe("nvim-stm32 F429 software acceptance entry point", function()
     assert.equals(143, result.code, vim.inspect(result))
   end)
 end)
+
+describe("nvim-stm32 normal Neovim RPC process cleanup", function()
+  it("kills an owned descendant after the Neovim leader exits", function()
+    local result = vim
+      .system({
+        "python3",
+        "-B",
+        repo .. "/tests/integration/normal_neovim_rpc_cleanup_test.py",
+      }, { text = true })
+      :wait(10000)
+
+    assert.equals(0, result.code, (result.stderr or "") .. (result.stdout or ""))
+    assert.matches(
+      "normal Neovim RPC descendant cleanup regression passed",
+      result.stdout,
+      1,
+      true
+    )
+  end)
+end)

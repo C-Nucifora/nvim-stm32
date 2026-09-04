@@ -78,6 +78,8 @@ local function run_gate()
   edit_source(root)
 
   check(#vim.api.nvim_list_uis() > 0, "Neovim has no attached UI")
+  check(not vim.o.loadplugins, "RPC Neovim did not start with --noplugin")
+  check(vim.o.shadafile == "NONE", "RPC Neovim did not start with -i NONE")
 
   vim.cmd("STM32Info")
   local info = table.concat(notifications, "\n")

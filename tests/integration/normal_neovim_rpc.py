@@ -106,6 +106,39 @@ def rpc(nvim, socket_path, expression, timeout=30):
     )
 
 
+def cleanup_owned_process_group(process, group_id, timeout=3):
+    if process is None or group_id is None or process.pid != group_id:
+        raise ValueError("refusing to clean a process group not owned by this runner")
+
+    try:
+        os.killpg(group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        process.poll()
+        try:
+            os.killpg(group_id, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+
+    try:
+        os.killpg(group_id, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        process.poll()
+        try:
+            os.killpg(group_id, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+
+
 def main():
     nvim = shutil.which("nvim")
     if not nvim:
@@ -127,6 +160,7 @@ def main():
         tempfile.mkdtemp(prefix="nvim-stm32-rpc-", dir="/tmp")
     ).resolve()
     process = None
+    owned_group_id = None
     terminal_output = bytearray()
     try:
         root = prepare_project(base)
@@ -151,6 +185,9 @@ def main():
         process = subprocess.Popen(
             [
                 nvim,
+                "--noplugin",
+                "-i",
+                "NONE",
                 "-u",
                 str(INTEGRATION / "normal_init.lua"),
                 "--listen",
@@ -164,6 +201,7 @@ def main():
             stderr=terminal_slave,
             start_new_session=True,
         )
+        owned_group_id = process.pid
         os.close(terminal_slave)
         terminal_slave = -1
         reader = threading.Thread(
@@ -210,20 +248,21 @@ def main():
         print(f"normal Neovim RPC gate failed: {error}", file=sys.stderr)
         return 1
     finally:
-        if process is not None and process.poll() is None:
-            try:
-                rpc(nvim, socket_path, "execute('qa!')", timeout=3)
-            except (OSError, subprocess.SubprocessError):
-                pass
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGTERM)
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    rpc(nvim, socket_path, "execute('qa!')", timeout=3)
+                except (OSError, subprocess.SubprocessError):
+                    pass
                 try:
                     process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=3)
+                    pass
+            cleanup_owned_process_group(process, owned_group_id, 3)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
         for fd in (
             terminal_master,
             terminal_slave,

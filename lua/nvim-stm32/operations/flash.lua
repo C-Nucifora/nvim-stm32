@@ -919,7 +919,25 @@ function M.current(action, opts, callback)
   end
 
   function composite.cancel(reason)
-    if cancellation_accepted or finished or not active or not active.cancel then
+    if cancellation_accepted or finished then
+      return false
+    end
+    if stage == "between-stages" then
+      cancellation_accepted = true
+      finish(
+        immediate_failure(
+          action,
+          flash_error(
+            "flash-cancelled",
+            "flash cancelled before hardware started"
+              .. (reason and ": " .. tostring(reason) or ""),
+            action
+          )
+        )
+      )
+      return true
+    end
+    if not active or not active.cancel then
       return false
     end
     local accepted = active.cancel(reason)

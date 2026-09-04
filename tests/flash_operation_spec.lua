@@ -397,6 +397,7 @@ describe("nvim-stm32 flash operation execution", function()
   local original_executable
   local original_config
   local original_inspect_elf_command
+  local original_schedule
 
   local function completed_handle(id)
     return {
@@ -486,6 +487,7 @@ describe("nvim-stm32 flash operation execution", function()
     original_executable = vim.fn.executable
     original_config = nvim_stm32.config
     original_inspect_elf_command = flash.inspect_elf_command
+    original_schedule = vim.schedule
     flash.inspect_elf_command = function(_, item)
       return {
         {
@@ -512,6 +514,7 @@ describe("nvim-stm32 flash operation execution", function()
     vim.fn.executable = original_executable
     nvim_stm32.config = original_config
     flash.inspect_elf_command = original_inspect_elf_command
+    vim.schedule = original_schedule
     session.clear()
     vim.fn.delete(root, "rf")
   end)
@@ -1106,6 +1109,45 @@ printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
     assert.equals(1, callback_calls)
     assert.is_true(result.ok)
     assert.equals("completed", handle.state())
+  end)
+
+  it("cancels the scheduled gap without starting hardware", function()
+    local source = project(root, { image(root, "application") })
+    local elf = artifact(root, "application", "elf", "build-gap")
+    local opts = cube_opts(root)
+    opts.project = source
+    opts.artifacts = nil
+    local scheduled
+    vim.schedule = function(callback)
+      scheduled = callback
+    end
+    build.run = function(_, callback)
+      callback(build_result({ elf }, "build-gap"))
+      return completed_handle(93)
+    end
+    local hardware_calls = 0
+    operation.execute = function()
+      hardware_calls = hardware_calls + 1
+    end
+    local callback_calls = 0
+    local result
+
+    local handle = flash.current("flash", opts, function(value)
+      callback_calls = callback_calls + 1
+      result = value
+    end)
+
+    assert.equals("between-stages", handle.state())
+    assert.is_nil(handle.pid())
+    assert.is_true(handle.cancel("between-stages"))
+    assert.equals("cancelled", handle.state())
+    assert.is_nil(handle.pid())
+    assert.equals(1, callback_calls)
+    assert.is_false(result.ok)
+    assert.equals("flash-cancelled", result.error.code)
+    scheduled()
+    assert.equals(0, hardware_calls)
+    assert.equals(1, callback_calls)
   end)
 
   it("keeps accepted hardware cancellation nonterminal until child exit", function()
