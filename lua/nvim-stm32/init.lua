@@ -78,6 +78,8 @@ end
 ---@param opts? table
 ---@return table|nil, table|nil
 function M.plan(kind, opts)
+  local allow_target_mismatch = type(opts) == "table"
+    and opts.allow_target_mismatch == true
   opts = vim.deepcopy(opts or {})
   local operations, kind_err = operation_module(kind)
   if not operations then
@@ -98,6 +100,7 @@ function M.plan(kind, opts)
   local resolved = vim.tbl_deep_extend("force", M.get_config(), opts)
   resolved.configuration = opts.configuration or opts.preset or resolved.preset
   if kind == "flash" or kind == "erase" or kind == "reset" then
+    resolved.allow_target_mismatch = allow_target_mismatch
     return operations.plan(kind, project, resolved)
   end
   return operations.plan(project, resolved)

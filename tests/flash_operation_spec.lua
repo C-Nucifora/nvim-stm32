@@ -503,6 +503,83 @@ describe("nvim-stm32 flash operation execution", function()
     assert.equals(3, #calls)
   end)
 
+  it("does not accept a target mismatch override from setup config", function()
+    local source = project(root, { image(root, "application") })
+    local programmer = executable(root, "configured-programmer")
+    nvim_stm32.setup({
+      flash_backend = "cubeprogrammer",
+      programmer_path = programmer,
+      allow_target_mismatch = true,
+    })
+    local calls = {}
+    fake_sequence({
+      { output = "Device ID : 0x413\n" },
+      { output = "reset\n" },
+    }, calls)
+    local result
+
+    nvim_stm32.run("reset", {
+      project = source,
+      probe = { backend = "cubeprogrammer", serial = "ABC123" },
+    }, function(value)
+      result = value
+    end)
+
+    assert.equals(1, #calls)
+    assert.is_false(result.ok)
+    assert.equals("target-mismatch", result.error.code)
+  end)
+
+  it("accepts a target mismatch override from the direct invocation", function()
+    local source = project(root, { image(root, "application") })
+    local programmer = executable(root, "configured-programmer")
+    nvim_stm32.setup({
+      flash_backend = "cubeprogrammer",
+      programmer_path = programmer,
+    })
+    local calls = {}
+    fake_sequence({
+      { output = "Device ID : 0x413\n" },
+      { output = "reset\n" },
+    }, calls)
+    local result
+
+    nvim_stm32.run("reset", {
+      project = source,
+      probe = { backend = "cubeprogrammer", serial = "ABC123" },
+      allow_target_mismatch = true,
+    }, function(value)
+      result = value
+    end)
+
+    assert.equals(2, #calls)
+    assert.is_true(result.ok, vim.inspect(result))
+  end)
+
+  it(
+    "copies a target mismatch override only from direct public plan options",
+    function()
+      local source = project(root, { image(root, "application") })
+      local programmer = executable(root, "configured-programmer")
+      nvim_stm32.setup({
+        flash_backend = "cubeprogrammer",
+        programmer_path = programmer,
+        allow_target_mismatch = true,
+      })
+      local opts = {
+        project = source,
+        probe = { backend = "cubeprogrammer", serial = "ABC123" },
+      }
+
+      local guarded = assert(nvim_stm32.plan("reset", opts))
+      opts.allow_target_mismatch = true
+      local allowed = assert(nvim_stm32.plan("reset", opts))
+
+      assert.is_false(guarded.metadata.allow_target_mismatch)
+      assert.is_true(allowed.metadata.allow_target_mismatch)
+    end
+  )
+
   it("requires stlink verification output before reset", function()
     local app = image(root, "application", 0x08000000)
     local source = project(root, { app })

@@ -694,11 +694,14 @@ local function done_handle(state)
 end
 
 function M.current(action, opts, callback)
+  local invocation_opts = vim.deepcopy(opts or {})
+  local allow_target_mismatch = invocation_opts.allow_target_mismatch == true
   opts = vim.tbl_deep_extend(
     "force",
     vim.deepcopy(require("nvim-stm32").get_config()),
-    vim.deepcopy(opts or {})
+    invocation_opts
   )
+  opts.allow_target_mismatch = allow_target_mismatch
   callback = callback or function() end
   local project = opts.project
   if not project then
