@@ -1,6 +1,7 @@
 local model = require("nvim-stm32.model")
 local operation = require("nvim-stm32.operation")
 local build = require("nvim-stm32.operations.build")
+local locks = require("nvim-stm32.locks")
 local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
 
@@ -592,6 +593,242 @@ describe("nvim-stm32 operation execution", function()
     assert.equals(1, completions)
     assert.equals("operation-plan-invalid", result.error.code)
     assert.equals("completed", handle.state())
+  end)
+
+  local function generic_plan(id, lock_id)
+    return model.plan({
+      id = id,
+      kind = "flash",
+      project_id = root,
+      images = { "application" },
+      commands = { { argv = { "fake-programmer", "identify" } } },
+      locks = { { kind = "probe", id = lock_id } },
+      reset_policy = "final",
+      metadata = { project = project(root) },
+    })
+  end
+
+  local function generic_hooks(events)
+    return {
+      validate = function()
+        events[#events + 1] = "validate"
+      end,
+      preflight = function()
+        events[#events + 1] = "preflight"
+      end,
+      after_command = function(_, command_result)
+        events[#events + 1] = "after"
+        assert.same({ "fake-programmer", "identify" }, command_result.argv)
+        return true
+      end,
+      complete = function(plan, process_result)
+        events[#events + 1] = "complete"
+        return model.result({
+          ok = process_result.code == 0,
+          code = process_result.code,
+          output = process_result.output or "",
+          artifacts = {},
+          metadata = { operation_id = plan.id },
+        })
+      end,
+    }
+  end
+
+  it(
+    "executes generic hooks in order and releases after the terminal callback",
+    function()
+      local events = {}
+      local planned = generic_plan("flash-executor-success", "executor-success")
+      vim.fn.executable = function()
+        return 1
+      end
+      local process_handle = {
+        id = 73,
+        state = function()
+          return "completed"
+        end,
+        cancel = function()
+          return false
+        end,
+        pid = function()
+          return nil
+        end,
+      }
+      process.run = function(_, opts, callback)
+        events[#events + 1] = "process"
+        assert.is_true(opts.after_command({
+          argv = { "fake-programmer", "identify" },
+          output = "identified",
+          code = 0,
+          signal = 0,
+        }))
+        callback({ code = 0, signal = 0, output = "identified" })
+        return process_handle
+      end
+
+      local result
+      local handle = operation.execute(
+        planned,
+        {},
+        generic_hooks(events),
+        function(value)
+          events[#events + 1] = "callback"
+          result = value
+          local competing, err = locks.acquire("competitor", planned.locks)
+          assert.is_nil(competing)
+          assert.equals("operation-lock-contended", err.code)
+        end
+      )
+
+      assert.equals(process_handle, handle)
+      assert.is_true(result.ok)
+      assert.same(
+        { "validate", "preflight", "process", "after", "complete", "callback" },
+        events
+      )
+      local reacquired = assert(locks.acquire("after-success", planned.locks))
+      reacquired()
+    end
+  )
+
+  it("releases locks after process failure and after-command rejection", function()
+    vim.fn.executable = function()
+      return 1
+    end
+    local scenarios = {
+      {
+        id = "process-failure",
+        process_result = { code = 2, signal = 0, output = "failed" },
+        error_code = nil,
+      },
+      {
+        id = "continuation-rejection",
+        process_result = {
+          code = 0,
+          signal = 0,
+          output = "wrong target",
+          error = model.error({
+            code = "target-mismatch",
+            message = "nvim-stm32: target identity does not match",
+            operation = "flash",
+            hint = "select the connected target",
+          }),
+        },
+        error_code = "target-mismatch",
+      },
+    }
+
+    for _, scenario in ipairs(scenarios) do
+      local planned = generic_plan("flash-" .. scenario.id, scenario.id)
+      process.run = function(_, _, callback)
+        callback(scenario.process_result)
+        return { id = 74 }
+      end
+      local result
+      operation.execute(planned, {}, generic_hooks({}), function(value)
+        result = value
+      end)
+
+      if scenario.error_code then
+        assert.equals(scenario.error_code, result.error.code)
+      else
+        assert.is_false(result.ok)
+      end
+      local reacquired = assert(locks.acquire("after-" .. scenario.id, planned.locks))
+      reacquired()
+    end
+  end)
+
+  it("releases locks when process startup throws", function()
+    local planned = generic_plan("flash-start-failure", "start-failure")
+    vim.fn.executable = function()
+      return 1
+    end
+    process.run = function()
+      error("could not start")
+    end
+    local result
+
+    local handle = operation.execute(planned, {}, generic_hooks({}), function(value)
+      result = value
+    end)
+
+    assert.equals("completed", handle.state())
+    assert.equals("process-start-failed", result.error.code)
+    local reacquired = assert(locks.acquire("after-start-failure", planned.locks))
+    reacquired()
+  end)
+
+  it("keeps locks until a cancelled owned process reports exit", function()
+    local planned = generic_plan("flash-cancel", "cancel-timing")
+    vim.fn.executable = function()
+      return 1
+    end
+    local terminal_callback
+    local cancel_count = 0
+    local process_handle = {
+      id = 75,
+      state = function()
+        return "cancelling"
+      end,
+      cancel = function()
+        cancel_count = cancel_count + 1
+        return true
+      end,
+      pid = function()
+        return 410
+      end,
+    }
+    process.run = function(_, _, callback)
+      terminal_callback = callback
+      return process_handle
+    end
+    local result
+
+    local handle = operation.execute(planned, {}, generic_hooks({}), function(value)
+      result = value
+    end)
+    assert.equals(process_handle, handle)
+    assert.is_true(handle.cancel("user"))
+    assert.equals(1, cancel_count)
+
+    local competing, err = locks.acquire("while-cancelling", planned.locks)
+    assert.is_nil(competing)
+    assert.equals("operation-lock-contended", err.code)
+    assert.is_nil(result)
+
+    terminal_callback({
+      code = 143,
+      signal = 15,
+      output = "",
+      cancelled = true,
+    })
+
+    assert.is_false(result.ok)
+    local reacquired = assert(locks.acquire("after-cancel", planned.locks))
+    reacquired()
+  end)
+
+  it("reports lock contention without starting another process", function()
+    local planned = generic_plan("flash-contended", "shared-probe")
+    vim.fn.executable = function()
+      return 1
+    end
+    local release = assert(locks.acquire("active-flash", planned.locks))
+    local calls = 0
+    process.run = function()
+      calls = calls + 1
+    end
+    local result
+
+    local handle = operation.execute(planned, {}, generic_hooks({}), function(value)
+      result = value
+    end)
+
+    assert.equals(0, calls)
+    assert.equals("completed", handle.state())
+    assert.equals("operation-lock-contended", result.error.code)
+    release()
   end)
 end)
 

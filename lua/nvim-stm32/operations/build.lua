@@ -1,3 +1,5 @@
+local artifacts = require("nvim-stm32.discover.artifacts")
+local file_api = require("nvim-stm32.build.file_api")
 local model = require("nvim-stm32.model")
 local presets = require("nvim-stm32.build.presets")
 local session = require("nvim-stm32.session")
@@ -6,6 +8,150 @@ local context = require("nvim-stm32.operations.context")
 local M = {}
 
 local next_plan_id = 0
+
+local function operation_error(code, message, plan, process_result)
+  return model.error({
+    code = code,
+    message = "nvim-stm32: " .. message,
+    operation = plan.kind,
+    command = process_result and process_result.command or nil,
+    output = process_result and process_result.output or nil,
+    hint = "inspect the operation output and try again",
+  })
+end
+
+local function failure(plan, err, process_result)
+  process_result = process_result or {}
+  return model.result({
+    ok = false,
+    code = process_result.code or -1,
+    output = process_result.output or "",
+    artifacts = {},
+    error = err,
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id },
+  })
+end
+
+local function selected_project(plan)
+  local wanted = {}
+  for _, image_id in ipairs(plan.images) do
+    wanted[image_id] = true
+  end
+  local selected = vim.deepcopy(plan.metadata.project)
+  selected.images = vim.tbl_filter(function(image)
+    return wanted[image.id]
+  end, selected.images)
+  return selected
+end
+
+local function selected_reply(plan, reply)
+  local target_names = {}
+  for _, image in ipairs(selected_project(plan).images) do
+    if image.build_target then
+      target_names[image.build_target] = true
+    end
+  end
+  local targets = reply.targets or {}
+  if type(reply.configurations) == "table" then
+    local configuration_name = plan.metadata.configuration.file_api_configuration
+      or plan.metadata.configuration.name
+    if #reply.configurations == 1 then
+      targets = reply.configurations[1].targets or {}
+    else
+      targets = {}
+      for _, configuration in ipairs(reply.configurations) do
+        if configuration.name == configuration_name then
+          targets = configuration.targets or {}
+          break
+        end
+      end
+    end
+  end
+  return {
+    targets = vim.tbl_filter(function(target)
+      return vim.tbl_isempty(target_names) or target_names[target.name]
+    end, targets),
+  }
+end
+
+local function build_artifacts(plan)
+  local metadata = plan.metadata
+  local selected = selected_project(plan)
+  local configuration = metadata.configuration
+  if metadata.file_api then
+    local reply, reply_err = file_api.reply(configuration.binary_dir)
+    if not reply then
+      return nil, reply_err
+    end
+    return artifacts.from_cmake(
+      selected,
+      configuration,
+      selected_reply(plan, reply),
+      plan.id
+    )
+  end
+  return artifacts.from_tree(selected, configuration, plan.id)
+end
+
+local function successful_result(plan, process_result)
+  local found, artifact_err = build_artifacts(plan)
+  if not found then
+    return nil, artifact_err
+  end
+  local result = model.result({
+    ok = true,
+    code = process_result.code,
+    output = process_result.output or "",
+    artifacts = found,
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id },
+  })
+  local elves = artifacts.for_image(result.artifacts, plan.images[1], "elf")
+  if #plan.images == 1 and #elves == 1 then
+    result.elf = elves[1].path
+  end
+  return model.result(result)
+end
+
+local function successful_clean_result(plan, process_result)
+  local selected = {}
+  for _, image_id in ipairs(plan.images) do
+    selected[image_id] = true
+  end
+  local configuration = plan.metadata.configuration.name
+  local state = session.get(plan.project_id)
+  state.artifacts = vim.tbl_filter(function(artifact)
+    return not (selected[artifact.image_id] and artifact.configuration == configuration)
+  end, state.artifacts)
+  session.select(plan.project_id, {
+    artifacts = state.artifacts,
+    configuration = configuration,
+  })
+  return model.result({
+    ok = true,
+    code = process_result.code,
+    output = process_result.output or "",
+    artifacts = {},
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id, mode = "clean" },
+  })
+end
 
 local function adapter_for(project)
   return project.build.adapter
@@ -142,6 +288,72 @@ function M.plan(project, opts)
     reset_policy = "none",
     metadata = metadata,
   })
+end
+
+function M.validate(plan)
+  if type(plan.metadata) ~= "table" then
+    error("plan.metadata: expected table")
+  end
+  if type(plan.metadata.project) ~= "table" then
+    error("plan.metadata.project: expected table")
+  end
+  plan.metadata.project = model.project(plan.metadata.project)
+  if type(plan.metadata.configuration) ~= "table" then
+    error("plan.metadata.configuration: expected table")
+  end
+  plan.metadata.configuration = model.configuration(plan.metadata.configuration)
+  if plan.metadata.file_api ~= nil then
+    vim.validate("plan.metadata.file_api", plan.metadata.file_api, "table")
+    vim.validate(
+      "plan.metadata.file_api.query_path",
+      plan.metadata.file_api.query_path,
+      "string"
+    )
+    vim.validate(
+      "plan.metadata.file_api.reply_dir",
+      plan.metadata.file_api.reply_dir,
+      "string"
+    )
+  end
+end
+
+function M.preflight(plan)
+  if not plan.metadata.file_api then
+    return true
+  end
+  return file_api.write_query(plan.metadata.configuration.binary_dir)
+end
+
+function M.complete(plan, process_result)
+  if process_result.code ~= 0 then
+    return failure(
+      plan,
+      operation_error(
+        "process-failed",
+        "build command failed with exit code " .. tostring(process_result.code),
+        plan,
+        process_result
+      ),
+      process_result
+    )
+  end
+
+  local result, result_err
+  if plan.metadata.mode == "clean" then
+    result = successful_clean_result(plan, process_result)
+  else
+    result, result_err = successful_result(plan, process_result)
+  end
+  if not result then
+    return failure(plan, result_err, process_result)
+  end
+  session.select(plan.project_id, {
+    configuration = plan.metadata.configuration.name,
+  })
+  if plan.metadata.mode ~= "clean" then
+    session.record(plan.project_id, result)
+  end
+  return result
 end
 
 local function notify_error(err)

@@ -97,6 +97,7 @@ describe("nvim-stm32.process.run", function()
     assert.equals(0, done.signal)
     assert.equals("stdout 1\nstderr 1\nstdout 2\nstderr 2\n", done.output)
     assert.same(commands[2], done.command)
+    assert.equals(2, done.command_index)
     assert.same({
       {
         argv = commands[1],
@@ -117,12 +118,13 @@ describe("nvim-stm32.process.run", function()
     assert.is_true(done.ended_ns >= done.started_ns)
   end)
 
-  it("stops after the first failed command", function()
-    exit_codes[1] = 1
+  it("reports the middle command when it stops on failure", function()
+    exit_codes[2] = 1
     local done
     local commands = {
       { "cmake", "--preset", "Debug" },
       { "cmake", "--build", "build/Debug" },
+      { "cmake", "--install", "build/Debug" },
     }
 
     process.run(commands, { cwd = "/work/fw", env = {} }, function(result)
@@ -132,19 +134,84 @@ describe("nvim-stm32.process.run", function()
     assert.is_true(vim.wait(100, function()
       return done ~= nil
     end))
-    assert.equals(1, #calls)
-    assert.same(commands[1], done.command)
+    assert.equals(2, #calls)
+    assert.same(commands[2], done.command)
+    assert.equals(2, done.command_index)
     assert.equals(1, done.code)
-    assert.equals("stdout 1\nstderr 1\n", done.output)
+    assert.equals("stdout 1\nstderr 1\nstdout 2\nstderr 2\n", done.output)
     assert.same({
       {
         argv = commands[1],
         output = "stdout 1\nstderr 1\n",
+        code = 0,
+        signal = 0,
+      },
+      {
+        argv = commands[2],
+        output = "stdout 2\nstderr 2\n",
         code = 1,
         signal = 0,
       },
     }, done.commands)
   end)
+
+  it("stops before the next child when after_command rejects continuation", function()
+    local done
+    local gate_error = {
+      code = "target-mismatch",
+      message = "nvim-stm32: target identity does not match",
+      operation = "flash",
+      hint = "select the connected target",
+    }
+    local seen
+
+    process.run({ { "identify" }, { "program" } }, {
+      after_command = function(command_result)
+        seen = vim.deepcopy(command_result)
+        return nil, gate_error
+      end,
+    }, function(result)
+      done = result
+    end)
+
+    assert.is_true(vim.wait(100, function()
+      return done ~= nil
+    end))
+    assert.equals(1, #calls)
+    assert.same({ "identify" }, done.command)
+    assert.equals(1, done.command_index)
+    assert.same(gate_error, done.error)
+    assert.same(done.commands[1], seen)
+    assert.equals(1, #done.commands)
+  end)
+
+  it(
+    "reports the command whose spawn failed without adding a command result",
+    function()
+      local done
+      local count = 0
+      process.system = function(_, _, callback)
+        count = count + 1
+        if count == 1 then
+          callback({ code = 0, signal = 0 })
+          return { pid = 40, kill = function() end }
+        end
+        error("spawn denied")
+      end
+
+      process.run({ { "first" }, { "second" }, { "third" } }, {}, function(result)
+        done = result
+      end)
+
+      assert.is_true(vim.wait(100, function()
+        return done ~= nil
+      end))
+      assert.equals(-1, done.code)
+      assert.same({ "second" }, done.command)
+      assert.equals(2, done.command_index)
+      assert.equals(1, #done.commands)
+    end
+  )
 
   it("forwards stream chunks outside fast-event context", function()
     local done
@@ -189,7 +256,10 @@ describe("nvim-stm32.process.run", function()
       return child
     end
 
-    local handle = process.run({ { "long-job" } }, {}, function() end)
+    local done
+    local handle = process.run({ { "long-job" } }, {}, function(result)
+      done = result
+    end)
 
     assert.equals(41, handle.pid())
     assert.equals("running", handle.state())
@@ -200,6 +270,8 @@ describe("nvim-stm32.process.run", function()
     assert.is_true(vim.wait(100, function()
       return handle.state() == "cancelled"
     end))
+    assert.equals(1, done.command_index)
+    assert.equals(1, #done.commands)
   end)
 
   it("bounds captured output but keeps every streamed chunk", function()
@@ -287,6 +359,8 @@ describe("nvim-stm32.process.run", function()
     assert.equals(1, done_count)
     assert.is_true(done.cancelled)
     assert.is_true(done.timed_out)
+    assert.equals(1, done.command_index)
+    assert.equals(1, #done.commands)
     assert.equals("cancelled", handle.state())
   end)
 
