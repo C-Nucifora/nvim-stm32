@@ -127,8 +127,17 @@ function M.resolve(dir)
   table.sort(groups, function(a, b)
     return group_id(a, #groups, 1) < group_id(b, #groups, 2)
   end)
+  local unhinted, hinted = 0, 0
+  for _, signal in ipairs(candidates) do
+    if signal.image_hint then
+      hinted = hinted + 1
+    else
+      unhinted = unhinted + 1
+    end
+  end
+  local ambiguous = unhinted > 1 or (unhinted > 0 and hinted > 0)
   local _, measured_core, measured_fpu = nil, nil, nil
-  if #groups == 1 then
+  if #groups == 1 and not ambiguous then
     _, measured_core, measured_fpu = signals.scan_cmake(project_root)
   end
 
@@ -142,8 +151,13 @@ function M.resolve(dir)
       end
     end
     local target = target_from(group, image_signals)
-    target.core = measured_core or target.core
-    target.fpu = measured_fpu or target.fpu
+    local local_core, local_fpu = nil, nil
+    for _, signal in ipairs(image_signals) do
+      local_core = local_core or signal.core
+      local_fpu = local_fpu or signal.fpu
+    end
+    target.core = local_core or measured_core or target.core
+    target.fpu = local_fpu or measured_fpu or target.fpu
     target.root = project_root
     target.marker = marker
     target.build_backend = adapter
@@ -155,15 +169,7 @@ function M.resolve(dir)
   end
 
   local provenance = { signals = found }
-  local unhinted, hinted = 0, 0
-  for _, signal in ipairs(candidates) do
-    if signal.image_hint then
-      hinted = hinted + 1
-    else
-      unhinted = unhinted + 1
-    end
-  end
-  if unhinted > 1 or (unhinted > 0 and hinted > 0) then
+  if ambiguous then
     provenance.warnings = {
       model.error({
         code = "ambiguous-images",

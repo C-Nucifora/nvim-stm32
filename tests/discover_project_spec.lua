@@ -228,4 +228,36 @@ describe("nvim-stm32 project discovery", function()
     assert.equals("fpv5-sp-d16", target.fpu)
     vim.fn.delete(tmp, "rf")
   end)
+
+  it("does not aggregate CMake flags for ambiguous unhinted images", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/first.ioc", { "Mcu.Name=STM32F429ZITx" })
+    write(tmp .. "/second.ioc", { "Mcu.Name=STM32F429ZITx" })
+    write(
+      tmp .. "/cmake/stm32cubemx/CMakeLists.txt",
+      { "add_compile_definitions(STM32F429xx)" }
+    )
+    write(tmp .. "/cmake/toolchain.cmake", { "add_compile_options(-mcpu=cortex-m7)" })
+
+    local target = assert(detect.target(tmp))
+    assert.equals("cortex-m4", target.core)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("keeps local startup core ahead of split CMake flags", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/app.ioc", { "Mcu.Name=STM32H747XIHx" })
+    write(tmp .. "/startup_stm32h747xx.s", { ".cpu cortex-m4" })
+    write(
+      tmp .. "/cmake/stm32cubemx/CMakeLists.txt",
+      { "add_compile_definitions(STM32H747xx)" }
+    )
+    write(tmp .. "/cmake/toolchain.cmake", { "add_compile_options(-mcpu=cortex-m7)" })
+
+    local target = assert(detect.target(tmp))
+    assert.equals("cortex-m4", target.core)
+    vim.fn.delete(tmp, "rf")
+  end)
 end)
