@@ -77,6 +77,33 @@ describe("nvim-stm32.ui.float", function()
     end))
   end)
 
+  it("calls on_close once for a user-closed native window", function()
+    local closes = 0
+    local presenter = float.open(target, config(), function()
+      closes = closes + 1
+    end)
+    presenters[#presenters + 1] = presenter
+
+    vim.api.nvim_win_close(presenter.win, true)
+
+    assert.equals(1, closes)
+  end)
+
+  it("does not call on_close when success closes the native window", function()
+    local closes = 0
+    local presenter = float.open(target, config(0), function()
+      closes = closes + 1
+    end)
+    presenters[#presenters + 1] = presenter
+
+    presenter:finish(true)
+
+    assert.is_true(vim.wait(100, function()
+      return not vim.api.nvim_win_is_valid(presenter.win)
+    end))
+    assert.equals(0, closes)
+  end)
+
   it("uses snacks.win when it is available", function()
     local recorded
     local snack_window
@@ -114,5 +141,39 @@ describe("nvim-stm32.ui.float", function()
     assert.equals(snack_window, presenter.snacks)
     assert.equals(snack_window.win, presenter.win)
     assert.is_true(vim.api.nvim_win_is_valid(presenter.win))
+  end)
+
+  it("calls on_close once for a user-closed snacks window", function()
+    local snack_window
+    local closes = 0
+    package.loaded.snacks = {
+      win = function(opts)
+        snack_window = {
+          show = function(self)
+            self.win = vim.api.nvim_open_win(opts.buf, false, {
+              relative = "editor",
+              row = 0,
+              col = 0,
+              width = 20,
+              height = 5,
+              style = "minimal",
+            })
+            return self
+          end,
+          close = function(self)
+            vim.api.nvim_win_close(self.win, true)
+          end,
+        }
+        return snack_window
+      end,
+    }
+
+    local presenter = float.open(target, config(), function()
+      closes = closes + 1
+    end)
+    presenters[#presenters + 1] = presenter
+    vim.api.nvim_win_close(presenter.win, true)
+
+    assert.equals(1, closes)
   end)
 end)
