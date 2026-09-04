@@ -1,7 +1,8 @@
 describe("test harness", function()
-  it("puts the plugin on the runtimepath", function()
-    local found = vim.api.nvim_get_runtime_file("lua/nvim-stm32/", true)
-    assert.is_true(#found > 0)
+  it("loads the plugin module from the runtimepath", function()
+    local ok, mod = pcall(require, "nvim-stm32")
+    assert.is_true(ok)
+    assert.equals("table", type(mod))
   end)
 
   it("runs on a Neovim the plugin supports", function()
