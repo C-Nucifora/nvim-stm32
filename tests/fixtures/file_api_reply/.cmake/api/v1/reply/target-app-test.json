@@ -3,11 +3,11 @@
   "id": "app::@6890427a1f51a3e7e1df",
   "type": "EXECUTABLE",
   "paths": {
-    "source": "/placeholder/source",
-    "build": "/placeholder/build"
+    "source": ".",
+    "build": "."
   },
   "artifacts": [
-    { "path": "/placeholder/build/app.elf" }
+    { "path": "app.elf" }
   ],
   "link": {
     "commandFragments": [

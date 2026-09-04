@@ -1,13 +1,17 @@
 {
   "kind": "codemodel",
   "version": { "major": 2, "minor": 7 },
+  "paths": {
+    "source": "/placeholder/source",
+    "build": "/placeholder/build"
+  },
   "configurations": [
     {
       "name": "Debug",
       "directories": [
         {
-          "source": "/placeholder/source",
-          "build": "/placeholder/build"
+          "source": ".",
+          "build": "."
         }
       ],
       "targets": [
