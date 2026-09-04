@@ -2,6 +2,7 @@ local build = require("nvim-stm32.backend.build")
 local float = require("nvim-stm32.ui.float")
 local plugin = require("nvim-stm32")
 local process = require("nvim-stm32.process")
+local session = require("nvim-stm32.session")
 
 local function fixture(rel)
   local here =
@@ -68,6 +69,7 @@ describe("nvim-stm32 ELF discovery", function()
   end)
 
   after_each(function()
+    session.clear()
     vim.fn.delete(root, "rf")
   end)
 
@@ -140,6 +142,26 @@ describe("nvim-stm32 ELF discovery", function()
         )
       )
     )
+  end)
+
+  it("uses the session artifact view for compatibility lookup", function()
+    local elf = root .. "/artifacts/app.elf"
+    vim.fn.mkdir(root .. "/artifacts", "p")
+    vim.fn.writefile({ "app" }, elf)
+    session.record(root, {
+      artifacts = {
+        {
+          image_id = "application",
+          kind = "elf",
+          path = elf,
+          configuration = "Debug",
+          build_target = "app",
+          modified_ns = 1,
+        },
+      },
+    })
+
+    assert.equals(elf, build.find_elf({ root = root, build_backend = "make" }, {}))
   end)
 end)
 
@@ -247,43 +269,42 @@ describe("nvim-stm32 build execution", function()
 end)
 
 describe("nvim-stm32 current build", function()
-  local original_run
-
-  before_each(function()
-    original_run = build.run
-  end)
+  local operations = require("nvim-stm32.operations.build")
 
   after_each(function()
-    build.run = original_run
     pcall(vim.cmd, "bwipeout!")
   end)
 
-  it("detects from the current buffer and accepts an explicit preset", function()
+  it("delegates current builds to the operation implementation", function()
+    local original_current = operations.current
     local captured
-    build.run = function(target, opts)
-      captured = { target = target, opts = opts }
+    operations.current = function(opts, callback)
+      captured = { opts = opts, callback = callback }
+      return { id = 17 }
     end
-    vim.cmd("edit " .. vim.fn.fnameescape(fixture("nucleo_cmake/Core/Src/main.c")))
+    local callback = function() end
 
-    build.current({ preset = "Release" })
+    local handle = build.current({ configuration = "Debug" }, callback)
 
-    assert.equals(fixture("nucleo_cmake"), captured.target.root)
-    assert.equals("Release", captured.opts.preset)
+    operations.current = original_current
+    assert.equals(17, handle.id)
+    assert.equals("Debug", captured.opts.configuration)
+    assert.equals(callback, captured.callback)
   end)
 end)
 
 describe("nvim-stm32 preset error presentation", function()
-  local detect = require("nvim-stm32.detect")
-  local original_target
+  local discovery = require("nvim-stm32.discover.project")
+  local original_resolve
   local original_notify
 
   before_each(function()
-    original_target = detect.target
+    original_resolve = discovery.resolve
     original_notify = vim.notify
   end)
 
   after_each(function()
-    detect.target = original_target
+    discovery.resolve = original_resolve
     vim.notify = original_notify
   end)
 
@@ -292,8 +313,16 @@ describe("nvim-stm32 preset error presentation", function()
     vim.fn.mkdir(root, "p")
     vim.fn.writefile({ "not json" }, root .. "/CMakePresets.json")
     local notification
-    detect.target = function()
-      return { root = root, build_backend = "cmake_presets" }
+    discovery.resolve = function()
+      return {
+        id = root,
+        root = root,
+        kind = "cmake_presets",
+        build = { adapter = "cmake_presets" },
+        images = {
+          { id = "application", name = "application", target = {} },
+        },
+      }
     end
     vim.notify = function(message, level)
       assert.equals("string", type(message))

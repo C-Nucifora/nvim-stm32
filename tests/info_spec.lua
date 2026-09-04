@@ -69,6 +69,32 @@ describe("nvim-stm32.ui.info.lines", function()
     local text = table.concat(info.lines(no_build), "\n")
     assert.is_truthy(text:find("no build file", 1, true))
   end)
+
+  it("lists project images, MCUs, configuration, and known artifacts", function()
+    local project = {
+      id = "/w/dual",
+      root = "/w/dual",
+      kind = "cmake_presets",
+      build = { marker = "/w/dual/CMakePresets.json" },
+      images = {
+        { id = "CM4", target = { mcu = "STM32H747XIHx" } },
+        { id = "CM7", target = { mcu = "STM32H747XIHx" } },
+      },
+    }
+    local state = {
+      configuration = "Debug",
+      artifacts = {
+        { image_id = "CM4", kind = "elf", path = "/w/dual/build/Debug/cm4.elf" },
+      },
+    }
+    local text = table.concat(info.lines(project, state), "\n")
+
+    assert.matches("Project: /w/dual", text, 1, true)
+    assert.matches("CM4: STM32H747XIHx", text, 1, true)
+    assert.matches("CM7: STM32H747XIHx", text, 1, true)
+    assert.matches("Configuration: Debug", text, 1, true)
+    assert.matches("cm4.elf", text, 1, true)
+  end)
 end)
 
 describe(":STM32Info", function()

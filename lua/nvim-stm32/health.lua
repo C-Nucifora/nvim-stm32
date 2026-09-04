@@ -6,6 +6,51 @@ local M = {}
 
 local h = vim.health
 
+function M.cmake_project_status(project, opts)
+  opts = opts or {}
+  local cmake_path = opts.cmake_path
+  if cmake_path == nil then
+    cmake_path = vim.fn.exepath("cmake")
+  end
+  if cmake_path == "" then
+    return "warn", "cmake not found; project configuration cannot run"
+  end
+
+  local adapter = project.build and project.build.adapter or project.kind
+  if adapter ~= "cmake_presets" and adapter ~= "cmake_plain" then
+    return "info", "CMake File API does not apply to this build backend"
+  end
+
+  local binary_dir = opts.binary_dir
+  if not binary_dir and adapter == "cmake_presets" then
+    local configurations, configuration_err =
+      require("nvim-stm32.build.presets").configurations(project.root)
+    if not configurations then
+      return "warn", "CMake configurations are malformed: " .. configuration_err.message
+    end
+    local selected = require("nvim-stm32.session").get(project).configuration
+    for _, configuration in ipairs(configurations) do
+      if configuration.name == selected or (#configurations == 1 and not selected) then
+        binary_dir = configuration.binary_dir
+        break
+      end
+    end
+    if not binary_dir then
+      return "info", "CMake configuration not selected"
+    end
+  end
+  binary_dir = binary_dir or project.root .. "/build"
+  local reply_dir = binary_dir .. "/.cmake/api/v1/reply"
+  if #vim.fn.glob(reply_dir .. "/index-*.json", false, true) == 0 then
+    return "info", "CMake File API reply absent; project is not configured yet"
+  end
+  local reply, reply_err = require("nvim-stm32.build.file_api").reply(binary_dir)
+  if not reply then
+    return "warn", "CMake File API reply is malformed: " .. reply_err.message
+  end
+  return "ok", ("CMake File API reply: %d executable target(s)"):format(#reply.targets)
+end
+
 --- Classify a resolved tool path.
 ---
 --- Pure, so the specs pin the wording without a real toolchain on the runner,
@@ -61,29 +106,36 @@ function M.check()
       and previous ~= "health://"
       and vim.fn.fnamemodify(previous, ":p:h")
     or nil
-  local target, detection_error = require("nvim-stm32.detect").target(start)
-  if not target then
-    h.info(detection_error)
+  local project, detection_error = require("nvim-stm32.discover.project").resolve(start)
+  if not project then
+    h.info(detection_error.message or tostring(detection_error))
   else
-    h.ok("project: " .. target.root)
-    h.info("build backend: " .. (target.build_backend or "none in this directory"))
-    if target.mcu then
-      local report = target.confidence == "exact" and h.ok or h.warn
-      report(
-        ("MCU: %s (%s, %d of %d signals agree)"):format(
-          target.mcu,
-          target.confidence,
-          target.agreement,
-          #target.signals
+    h.ok("project: " .. project.id)
+    h.info("build backend: " .. (project.build.adapter or project.kind or "none"))
+    for _, image in ipairs(project.images) do
+      local target = image.target or {}
+      if target.mcu then
+        local report = target.confidence == "exact" and h.ok or h.warn
+        report(
+          ("image %s MCU: %s (%s)"):format(
+            image.id,
+            target.mcu,
+            target.confidence or "unknown"
+          )
         )
-      )
-      if target.board then
-        h.info("board: " .. target.board)
+      else
+        h.warn("image " .. image.id .. " MCU not resolved", {
+          "Add a CubeMX .ioc, a startup file or a named linker script to the project.",
+        })
       end
+    end
+    local cmake_level, cmake_message = M.cmake_project_status(project)
+    if cmake_level == "ok" then
+      h.ok(cmake_message)
+    elseif cmake_level == "warn" then
+      h.warn(cmake_message)
     else
-      h.warn("MCU not resolved; family-specific features are off", {
-        "Add a CubeMX .ioc, a startup file or a named linker script to the project.",
-      })
+      h.info(cmake_message)
     end
   end
 

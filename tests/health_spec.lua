@@ -32,6 +32,73 @@ describe("nvim-stm32.health.tool_status", function()
   end)
 end)
 
+describe("nvim-stm32.health.cmake_project_status", function()
+  it("distinguishes missing CMake", function()
+    local level, message = health.cmake_project_status({
+      root = "/fw",
+      kind = "cmake_presets",
+    }, { cmake_path = "" })
+    assert.equals("warn", level)
+    assert.matches("cmake not found", message, 1, true)
+  end)
+
+  it("distinguishes an absent pre-configure File API reply", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    local level, message = health.cmake_project_status({
+      root = root,
+      kind = "cmake_presets",
+    }, { cmake_path = "/usr/bin/cmake", binary_dir = root .. "/build/Debug" })
+    assert.equals("info", level)
+    assert.matches("not configured yet", message, 1, true)
+    vim.fn.delete(root, "rf")
+  end)
+
+  it("distinguishes malformed and usable File API replies", function()
+    local root = vim.fn.tempname()
+    local binary = root .. "/build/Debug"
+    local replies = binary .. "/.cmake/api/v1/reply"
+    vim.fn.mkdir(replies, "p")
+    vim.fn.writefile({ "bad json" }, replies .. "/index-test.json")
+
+    local malformed_level, malformed_message = health.cmake_project_status({
+      root = root,
+      kind = "cmake_presets",
+    }, { cmake_path = "/usr/bin/cmake", binary_dir = binary })
+    assert.equals("warn", malformed_level)
+    assert.matches("malformed", malformed_message, 1, true)
+
+    vim.fn.delete(replies, "rf")
+    vim.fn.mkdir(replies, "p")
+    vim.fn.writefile({
+      vim.json.encode({
+        objects = {
+          {
+            kind = "codemodel",
+            version = { major = 2 },
+            jsonFile = "codemodel-test.json",
+          },
+        },
+      }),
+    }, replies .. "/index-test.json")
+    vim.fn.writefile({
+      vim.json.encode({
+        kind = "codemodel",
+        version = { major = 2 },
+        configurations = { { targets = {} } },
+      }),
+    }, replies .. "/codemodel-test.json")
+
+    local ok_level, ok_message = health.cmake_project_status({
+      root = root,
+      kind = "cmake_presets",
+    }, { cmake_path = "/usr/bin/cmake", binary_dir = binary })
+    assert.equals("ok", ok_level)
+    assert.matches("File API reply", ok_message, 1, true)
+    vim.fn.delete(root, "rf")
+  end)
+end)
+
 describe("nvim-stm32.health.check", function()
   it("runs without error", function()
     -- :checkhealth loads the module and calls check(); a nil index in there

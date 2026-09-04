@@ -52,6 +52,29 @@ function M.find_elf(target, opts)
   local image_id = target.image_id or opts.image_id
   local found
 
+  if not opts.artifacts and target.root then
+    local state = require("nvim-stm32.session").get(target.root)
+    if #state.artifacts > 0 then
+      opts = vim.tbl_extend("force", {}, opts, { artifacts = state.artifacts })
+      image_id = image_id or state.image_id
+      if not image_id then
+        local ids = {}
+        for _, artifact in ipairs(state.artifacts) do
+          ids[artifact.image_id] = true
+        end
+        local sole
+        for id in pairs(ids) do
+          if sole then
+            sole = nil
+            break
+          end
+          sole = id
+        end
+        image_id = sole
+      end
+    end
+  end
+
   if opts.artifacts then
     if not image_id then
       return nil, "nvim-stm32: image id is required to select a built .elf"
@@ -174,39 +197,8 @@ function M.run(target, opts, callback)
   return presenter
 end
 
-function M.current(opts)
-  local target, detect_err = require("nvim-stm32.detect").target()
-  if not target then
-    vim.notify(detect_err, vim.log.levels.WARN)
-    return
-  end
-  if not target.build_backend then
-    vim.notify("nvim-stm32: project has no supported build file", vim.log.levels.WARN)
-    return
-  end
-
-  local config = resolved_config(opts)
-  if target.build_backend ~= "cmake_presets" or config.preset then
-    return M.run(target, config)
-  end
-
-  local names, preset_err = M.backends.cmake_presets.presets(target.root)
-  if not names then
-    vim.notify(preset_err, vim.log.levels.ERROR)
-    return
-  end
-  if #names == 0 then
-    vim.notify("nvim-stm32: no visible CMake presets found", vim.log.levels.WARN)
-    return
-  end
-
-  vim.ui.select(names, { prompt = "STM32 build preset" }, function(choice)
-    if not choice then
-      return
-    end
-    config.preset = choice
-    M.run(target, config)
-  end)
+function M.current(opts, callback)
+  return require("nvim-stm32.operations.build").current(opts, callback)
 end
 
 return M
