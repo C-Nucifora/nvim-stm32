@@ -43,15 +43,30 @@ describe("nvim-stm32 corpus validation", function()
   end)
 
   it("accepts the exact F429ZI part and compatible F429 wildcards", function()
-    assert.is_true(
-      runner.is_f429({ images = { { target = { mcu = "STM32F429ZITx" } } } })
-    )
-    assert.is_true(
-      runner.is_f429({ images = { { target = { mcu = "STM32F429xx" } } } })
-    )
-    assert.is_false(
-      runner.is_f429({ images = { { target = { mcu = "STM32F401RETx" } } } })
-    )
+    assert.is_true(runner.is_f429({
+      images = { { id = "application", target = { mcu = "STM32F429ZITx" } } },
+    }))
+    assert.is_true(runner.is_f429({
+      images = { { id = "application", target = { mcu = "STM32F429xx" } } },
+    }))
+    assert.is_false(runner.is_f429({
+      images = { { id = "application", target = { mcu = "STM32F401RETx" } } },
+    }))
+  end)
+
+  it("rejects an unexpected image count even when every MCU is F429", function()
+    assert.is_false(runner.is_f429({
+      images = {
+        { id = "application", target = { mcu = "STM32F429ZITx" } },
+        { id = "other", target = { mcu = "STM32F429xx" } },
+      },
+    }))
+  end)
+
+  it("requires the single image to be named application", function()
+    assert.is_false(runner.is_f429({
+      images = { { id = "CM4", target = { mcu = "STM32F429ZITx" } } },
+    }))
   end)
 
   it("requires a fresh application ELF from the current build result", function()
@@ -96,5 +111,124 @@ describe("nvim-stm32 corpus validation", function()
       assert.is_nil(parsed)
       assert.matches("usage:", err, 1, true)
     end
+  end)
+
+  it("aborts traversal when cancellation never reaches a terminal state", function()
+    local events = {}
+    local state = "running"
+    local roots = { "/one", "/two" }
+    local entries = vim.tbl_map(function(root)
+      return { root = root, resolved = { project = { root = root } } }
+    end, roots)
+
+    local results, terminal = runner.build_projects(entries, {
+      timeout_ms = 10,
+      grace_ms = 5,
+      run = function(_, opts)
+        events[#events + 1] = "run " .. opts.project.root
+        return {
+          cancel = function(reason)
+            assert.equals("corpus-timeout", reason)
+            state = "cancelling"
+            events[#events + 1] = "cancel " .. opts.project.root
+            return true
+          end,
+          state = function()
+            return state
+          end,
+        }
+      end,
+      wait = function(_, predicate)
+        assert.is_false(predicate())
+        return false
+      end,
+    })
+
+    assert.is_false(terminal)
+    assert.same({ "run /one", "cancel /one" }, events)
+    assert.equals(1, #results)
+    assert.is_false(results[1].ok)
+    assert.matches("did not reach a terminal state", results[1].error, 1, true)
+  end)
+
+  it("starts the next build only after cancellation becomes terminal", function()
+    local temp = vim.fn.tempname()
+    vim.fn.mkdir(temp, "p")
+    local elf = temp .. "/app.elf"
+    vim.fn.writefile({ "elf" }, elf)
+    local events = {}
+    local state = "running"
+    local first_callback
+    local wait_count = 0
+    local entries = vim.tbl_map(function(root)
+      return { root = root, resolved = { project = { root = root } } }
+    end, { "/one", "/two" })
+
+    local results, terminal = runner.build_projects(entries, {
+      timeout_ms = 10,
+      grace_ms = 5,
+      run = function(_, opts, callback)
+        local root = opts.project.root
+        events[#events + 1] = "run " .. root
+        if root == "/one" then
+          first_callback = callback
+          return {
+            cancel = function()
+              state = "cancelling"
+              events[#events + 1] = "cancel /one"
+              return true
+            end,
+            state = function()
+              return state
+            end,
+          }
+        end
+        callback({
+          ok = true,
+          metadata = { operation_id = "build-2" },
+          artifacts = {
+            {
+              image_id = "application",
+              kind = "elf",
+              path = elf,
+              build_id = "build-2",
+            },
+          },
+        })
+        events[#events + 1] = "callback /two"
+        return {
+          cancel = function() end,
+          state = function()
+            return "completed"
+          end,
+        }
+      end,
+      wait = function(_, predicate)
+        wait_count = wait_count + 1
+        if wait_count == 1 then
+          assert.is_false(predicate())
+          return false
+        end
+        if wait_count == 2 then
+          state = "cancelled"
+          first_callback({ ok = false, error = { message = "cancelled" } })
+          events[#events + 1] = "callback /one"
+        end
+        assert.is_true(predicate())
+        return true
+      end,
+    })
+
+    assert.is_true(terminal)
+    assert.same({
+      "run /one",
+      "cancel /one",
+      "callback /one",
+      "run /two",
+      "callback /two",
+    }, events)
+    assert.is_false(results[1].ok)
+    assert.is_true(results[2].ok)
+    vim.fn.delete(temp, "rf")
   end)
 end)

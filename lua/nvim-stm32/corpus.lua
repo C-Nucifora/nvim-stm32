@@ -125,7 +125,8 @@ function M.is_f429(project)
   if
     type(project) ~= "table"
     or type(project.images) ~= "table"
-    or #project.images == 0
+    or #project.images ~= 1
+    or project.images[1].id ~= "application"
   then
     return false
   end
@@ -262,12 +263,12 @@ local function resolve(root)
   }
 end
 
-local function build_project(resolved)
+local function build_project(resolved, runtime)
   local result
-  local handle, run_err = plugin.run("build", {
+  local handle, run_err = runtime.run("build", {
     project = resolved.project,
     configuration = "Debug",
-    timeout_ms = BUILD_TIMEOUT_MS,
+    timeout_ms = runtime.timeout_ms,
   }, function(value)
     result = value
   end)
@@ -275,26 +276,60 @@ local function build_project(resolved)
     return nil, error_message(run_err)
   end
 
-  local completed = vim.wait(BUILD_TIMEOUT_MS + CALLBACK_GRACE_MS, function()
+  local completed = runtime.wait(runtime.timeout_ms, function()
     return result ~= nil
   end, 20)
   if not completed then
     handle.cancel("corpus-timeout")
-    vim.wait(CALLBACK_GRACE_MS, function()
-      return result ~= nil
-        or handle.state() == "completed"
-        or handle.state() == "cancelled"
+    local terminal = runtime.wait(runtime.grace_ms, function()
+      local state = handle.state()
+      return state == "completed" or state == "cancelled"
     end, 20)
-    return nil, "timed out waiting for the Debug build callback"
+    if not terminal then
+      return nil, "Debug build did not reach a terminal state after cancellation", false
+    end
+    return nil, "timed out waiting for the Debug build callback", true
   end
   if not result.ok then
     local message = error_message(result.error)
     if result.output and result.output ~= "" then
       message = message .. "\n" .. result.output
     end
-    return nil, message
+    return nil, message, true
   end
-  return M.application_elf(result)
+  local elf, elf_err = M.application_elf(result)
+  return elf, elf_err, true
+end
+
+function M.build_projects(entries, opts)
+  opts = opts or {}
+  local runtime = {
+    run = opts.run or plugin.run,
+    wait = opts.wait or vim.wait,
+    timeout_ms = opts.timeout_ms or BUILD_TIMEOUT_MS,
+    grace_ms = opts.grace_ms or CALLBACK_GRACE_MS,
+  }
+  local results = {}
+  for _, entry in ipairs(entries) do
+    if not entry.resolved then
+      results[#results + 1] = {
+        root = entry.root,
+        ok = false,
+        error = entry.error,
+      }
+    else
+      local elf, build_err, terminal = build_project(entry.resolved, runtime)
+      results[#results + 1] = {
+        root = entry.root,
+        ok = elf ~= nil,
+        error = build_err,
+      }
+      if terminal == false then
+        return results, false
+      end
+    end
+  end
+  return results, true
 end
 
 local function emit(lines)
@@ -321,21 +356,28 @@ function M.main(args)
     return 2
   end
 
-  local results = {}
-  for _, root in ipairs(roots) do
-    local resolved, resolved_err = resolve(root)
-    if not resolved then
-      results[#results + 1] = { root = root, ok = false, error = resolved_err }
-    elseif options.build then
-      local elf, build_err = build_project(resolved)
-      results[#results + 1] = {
+  local results
+  if options.build then
+    local entries = {}
+    for _, root in ipairs(roots) do
+      local resolved, resolved_err = resolve(root)
+      entries[#entries + 1] = {
         root = root,
-        ok = elf ~= nil,
-        error = build_err,
+        resolved = resolved,
+        error = resolved_err,
       }
-    else
-      emit(resolved.details)
-      results[#results + 1] = { root = root, ok = true }
+    end
+    results = M.build_projects(entries)
+  else
+    results = {}
+    for _, root in ipairs(roots) do
+      local resolved, resolved_err = resolve(root)
+      if not resolved then
+        results[#results + 1] = { root = root, ok = false, error = resolved_err }
+      else
+        emit(resolved.details)
+        results[#results + 1] = { root = root, ok = true }
+      end
     end
   end
   local code, lines = M.summary(results)
