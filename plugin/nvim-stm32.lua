@@ -24,12 +24,24 @@ vim.api.nvim_create_user_command("STM32Analyze", function()
   require("nvim-stm32.operations.analyze").current()
 end, { desc = "nvim-stm32: analyze memory use for the current firmware" })
 
+vim.api.nvim_create_user_command("STM32Flash", function()
+  require("nvim-stm32.ui.operation").current("flash")
+end, { desc = "nvim-stm32: build, program, verify, and reset the current firmware" })
+
+vim.api.nvim_create_user_command("STM32Erase", function()
+  require("nvim-stm32.ui.operation").current("erase")
+end, { desc = "nvim-stm32: confirm and mass erase the selected target" })
+
+vim.api.nvim_create_user_command("STM32Reset", function()
+  require("nvim-stm32.ui.operation").current("reset")
+end, { desc = "nvim-stm32: reset the selected target" })
+
 vim.api.nvim_create_user_command("STM32Plan", function(args)
   require("nvim-stm32.ui.plan").current(args.args ~= "" and args.args or "build")
 end, {
   nargs = "?",
   complete = function()
-    return { "build", "clean", "rebuild", "analyze" }
+    return { "build", "clean", "rebuild", "analyze", "flash", "erase", "reset" }
   end,
   desc = "nvim-stm32: preview an operation plan",
 })
