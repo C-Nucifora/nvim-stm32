@@ -212,4 +212,20 @@ describe("nvim-stm32 project discovery", function()
     assert.equals("CM4", found[1].image_hint)
     vim.fn.delete(tmp, "rf")
   end)
+
+  it("keeps split CMake flags on a single-image compatibility target", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    write(tmp .. "/cmake/stm32cubemx/CMakeLists.txt", {
+      "add_compile_definitions(STM32F429xx)",
+    })
+    write(tmp .. "/cmake/toolchain.cmake", {
+      "add_compile_options(-mcpu=cortex-m7 -mfpu=fpv5-sp-d16)",
+    })
+
+    local target = assert(detect.target(tmp))
+    assert.equals("cortex-m7", target.core)
+    assert.equals("fpv5-sp-d16", target.fpu)
+    vim.fn.delete(tmp, "rf")
+  end)
 end)

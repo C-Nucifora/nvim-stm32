@@ -127,6 +127,10 @@ function M.resolve(dir)
   table.sort(groups, function(a, b)
     return group_id(a, #groups, 1) < group_id(b, #groups, 2)
   end)
+  local _, measured_core, measured_fpu = nil, nil, nil
+  if #groups == 1 then
+    _, measured_core, measured_fpu = signals.scan_cmake(project_root)
+  end
 
   local images = {}
   for index, group in ipairs(groups) do
@@ -138,6 +142,8 @@ function M.resolve(dir)
       end
     end
     local target = target_from(group, image_signals)
+    target.core = measured_core or target.core
+    target.fpu = measured_fpu or target.fpu
     target.root = project_root
     target.marker = marker
     target.build_backend = adapter
