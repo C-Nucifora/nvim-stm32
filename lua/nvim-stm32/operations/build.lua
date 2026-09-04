@@ -1,141 +1,16 @@
 local model = require("nvim-stm32.model")
 local presets = require("nvim-stm32.build.presets")
 local session = require("nvim-stm32.session")
+local context = require("nvim-stm32.operations.context")
 
 local M = {}
 
 local next_plan_id = 0
 
-local function build_error(code, message, hint)
-  return model.error({
-    code = code,
-    message = "nvim-stm32: " .. message,
-    operation = "build",
-    hint = hint or "check the project build configuration and try again",
-  })
-end
-
 local function adapter_for(project)
   return project.build.adapter
     or project.kind
     or (project.images[1].target and project.images[1].target.build_backend)
-end
-
-local function configurations(project, adapter)
-  if adapter == "cmake_presets" then
-    return presets.configurations(project.root)
-  end
-  if adapter == "cmake_plain" then
-    return {
-      {
-        name = "default",
-        configure_preset = "default",
-        binary_dir = project.root .. "/build",
-      },
-    }
-  end
-  if adapter == "make" then
-    return {
-      {
-        name = "default",
-        configure_preset = "default",
-        binary_dir = project.root .. "/build",
-      },
-    }
-  end
-  return nil,
-    build_error("build-backend-unknown", "unknown build backend " .. tostring(adapter))
-end
-
-local function named_configuration(available, requested)
-  if type(requested) == "table" then
-    requested = requested.name
-  end
-  if requested == nil then
-    return nil
-  end
-  for _, configuration in ipairs(available) do
-    if configuration.name == requested then
-      return configuration
-    end
-  end
-  return false
-end
-
-local function resolve_configuration(project, opts, available)
-  local state = session.get(project)
-  local requested = opts.configuration
-  if requested == nil then
-    requested = opts.preset
-  end
-  if requested == nil then
-    requested = state.configuration
-  end
-  local selected = named_configuration(available, requested)
-  if selected == false then
-    return nil,
-      build_error(
-        "configuration-not-found",
-        "unknown build configuration "
-          .. tostring(type(requested) == "table" and requested.name or requested),
-        "run :STM32SelectConfig and choose a visible configuration"
-      )
-  end
-  if selected then
-    return selected
-  end
-  if #available == 1 then
-    return available[1]
-  end
-  return nil,
-    build_error(
-      "configuration-required",
-      #available == 0 and "no visible build configurations found"
-        or "a build configuration must be selected",
-      "run :STM32SelectConfig and choose a visible configuration"
-    )
-end
-
-local function select_images(project, opts)
-  local requested = opts.images
-  if not requested and opts.image_id then
-    requested = { opts.image_id }
-  end
-  if not requested then
-    local selected = session.get(project).image_id
-    if selected then
-      requested = { selected }
-    end
-  end
-  if not requested then
-    local all = {}
-    for _, image in ipairs(project.images) do
-      all[#all + 1] = image.id
-    end
-    return all
-  end
-  if type(requested) ~= "table" then
-    return nil, build_error("image-selection-invalid", "images must be a list")
-  end
-  local known = {}
-  for _, image in ipairs(project.images) do
-    known[image.id] = true
-  end
-  local selected, seen = {}, {}
-  for _, image_id in ipairs(requested) do
-    if type(image_id) ~= "string" or image_id == "" or not known[image_id] then
-      return nil,
-        build_error("image-not-found", "unknown project image " .. tostring(image_id))
-    end
-    if not seen[image_id] then
-      selected[#selected + 1] = image_id
-      seen[image_id] = true
-    end
-  end
-  if #selected == 0 then
-    return nil, build_error("image-selection-invalid", "at least one image is required")
-  end
-  return selected
 end
 
 local function image_targets(project, selected)
@@ -183,25 +58,16 @@ end
 
 function M.plan(project, opts)
   opts = vim.deepcopy(opts or {})
-  local project_ok, copied_project = pcall(model.project, project)
-  if not project_ok then
-    return nil, build_error("project-invalid", tostring(copied_project))
+  local resolved, resolved_err = context.resolve(project, opts)
+  if not resolved then
+    return nil, resolved_err
   end
-  project = copied_project
-
+  project = resolved.project
+  local configuration = resolved.configuration
+  local selected = vim.tbl_map(function(image)
+    return image.id
+  end, resolved.images)
   local adapter = adapter_for(project)
-  local available, configuration_err = configurations(project, adapter)
-  if not available then
-    return nil, configuration_err
-  end
-  local configuration, selected_err = resolve_configuration(project, opts, available)
-  if not configuration then
-    return nil, selected_err
-  end
-  local selected, image_err = select_images(project, opts)
-  if not selected then
-    return nil, image_err
-  end
 
   next_plan_id = next_plan_id + 1
   local binary_dir = vim.fs.normalize(configuration.binary_dir)
@@ -258,7 +124,7 @@ function M.select_configuration(opts, callback)
     vim.notify(project_err.message or tostring(project_err), vim.log.levels.WARN)
     return nil
   end
-  local available, available_err = configurations(project, adapter_for(project))
+  local available, available_err = context.configurations(project)
   if not available then
     notify_error(available_err)
     return nil
