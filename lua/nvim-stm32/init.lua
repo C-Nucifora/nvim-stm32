@@ -59,13 +59,16 @@ local function operation_module(kind)
   if kind == "analyze" then
     return require("nvim-stm32.operations.analyze")
   end
+  if kind == "flash" or kind == "erase" or kind == "reset" then
+    return require("nvim-stm32.operations.flash")
+  end
   if kind ~= "build" then
     return nil,
       require("nvim-stm32.model").error({
         code = "operation-kind-unsupported",
         message = "nvim-stm32: unsupported operation kind " .. tostring(kind),
         operation = tostring(kind),
-        hint = "use the build operation",
+        hint = "use build, analyze, flash, erase, or reset",
       })
   end
 end
@@ -94,6 +97,9 @@ function M.plan(kind, opts)
   end
   local resolved = vim.tbl_deep_extend("force", M.get_config(), opts)
   resolved.configuration = opts.configuration or opts.preset or resolved.preset
+  if kind == "flash" or kind == "erase" or kind == "reset" then
+    return operations.plan(kind, project, resolved)
+  end
   return operations.plan(project, resolved)
 end
 
@@ -103,6 +109,9 @@ end
 ---@param callback? function
 ---@return table|nil, table|nil
 function M.run(kind, opts, callback)
+  if kind == "flash" or kind == "erase" or kind == "reset" then
+    return require("nvim-stm32.operations.flash").current(kind, opts, callback)
+  end
   local plan, plan_err = M.plan(kind, opts)
   if not plan then
     return nil, plan_err
