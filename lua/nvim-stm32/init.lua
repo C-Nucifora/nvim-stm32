@@ -44,6 +44,14 @@ function M.resolve_project(dir)
   return require("nvim-stm32.discover.project").resolve(dir)
 end
 
+--- Enumerate probes and save a selection for the current project.
+---@param opts? table
+---@param callback? fun(probe: table, project: table)
+---@return table|nil
+function M.select_probe(opts, callback)
+  return require("nvim-stm32.ui.probes").select(opts, callback)
+end
+
 local function operation_module(kind)
   if kind == "build" or kind == "clean" or kind == "rebuild" then
     return require("nvim-stm32.operations.build")

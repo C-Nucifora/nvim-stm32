@@ -37,3 +37,7 @@ end, {
 vim.api.nvim_create_user_command("STM32SelectConfig", function()
   require("nvim-stm32.operations.build").select_configuration()
 end, { desc = "nvim-stm32: select a build configuration" })
+
+vim.api.nvim_create_user_command("STM32SelectProbe", function()
+  require("nvim-stm32").select_probe()
+end, { desc = "nvim-stm32: select an ST-LINK probe" })

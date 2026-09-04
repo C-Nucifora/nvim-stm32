@@ -1,4 +1,6 @@
 local health = require("nvim-stm32.health")
+local probes = require("nvim-stm32.probes")
+local tools = require("nvim-stm32.tools")
 
 describe("nvim-stm32.health.tool_status", function()
   it("reports a found tool with its path", function()
@@ -112,6 +114,32 @@ describe("nvim-stm32.health.check", function()
     local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
     assert.is_truthy(out:find("nvim-stm32: programmers", 1, true))
     assert.is_falsy(out:find("stack traceback", 1, true))
+    vim.cmd("bwipeout!")
+  end)
+
+  it("resolves programmer tools without enumerating probes", function()
+    local original_programmer = tools.programmer
+    local original_enumerate = probes.enumerate
+    local programmer_resolutions = 0
+    local enumerations = 0
+    tools.programmer = function()
+      programmer_resolutions = programmer_resolutions + 1
+      return nil
+    end
+    probes.enumerate = function()
+      enumerations = enumerations + 1
+      error("health must not enumerate probes")
+    end
+
+    local ok, err = pcall(function()
+      vim.cmd("checkhealth nvim-stm32")
+    end)
+    tools.programmer = original_programmer
+    probes.enumerate = original_enumerate
+
+    assert.is_true(ok, err)
+    assert.is_true(programmer_resolutions > 0)
+    assert.equals(0, enumerations)
     vim.cmd("bwipeout!")
   end)
 end)
