@@ -105,21 +105,44 @@ function M.programmer(cfg)
   return M.resolve("STM32_Programmer_CLI", cfg.programmer_path)
 end
 
+--- Resolve a tool that ships inside the ARM toolchain: an explicit override
+--- first, then toolchain_path, then $PATH.
+---
+--- toolchain_path exists precisely for users whose ARM toolchain is not on
+--- Neovim's $PATH, so it has to be tried before $PATH, not after: a bare
+--- $PATH lookup would report the tool missing in the one setup the option
+--- exists to serve.
+---@param name string           basename to look for, e.g. "arm-none-eabi-gcc"
+---@param cfg Stm32Config
+---@param override string|nil   explicit path from the config, if any
+---@return string|nil
+local function resolve_toolchain(name, cfg, override)
+  if override then
+    return M.resolve(name, override)
+  end
+  if cfg.toolchain_path then
+    local bundled = cfg.toolchain_path .. "/" .. name
+    if vim.fn.executable(bundled) == 1 then
+      return bundled
+    end
+  end
+  return M.resolve(name, nil)
+end
+
+--- arm-none-eabi-gcc, or nil. There is no gcc_path config key: toolchain_path
+--- is the documented override for the compiler. See resolve_toolchain().
+---@param cfg Stm32Config
+---@return string|nil
+function M.gcc(cfg)
+  return resolve_toolchain("arm-none-eabi-gcc", cfg, nil)
+end
+
 --- arm-none-eabi-gdb, or nil. Looks in toolchain_path first: the ARM toolchain
 --- ships its own gdb and a system gdb cannot debug a Cortex-M target.
 ---@param cfg Stm32Config
 ---@return string|nil
 function M.gdb(cfg)
-  if cfg.gdb_path then
-    return M.resolve("arm-none-eabi-gdb", cfg.gdb_path)
-  end
-  if cfg.toolchain_path then
-    local bundled = cfg.toolchain_path .. "/arm-none-eabi-gdb"
-    if vim.fn.executable(bundled) == 1 then
-      return bundled
-    end
-  end
-  return M.resolve("arm-none-eabi-gdb", nil)
+  return resolve_toolchain("arm-none-eabi-gdb", cfg, cfg.gdb_path)
 end
 
 --- openocd, or nil.

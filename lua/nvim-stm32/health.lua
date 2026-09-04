@@ -61,11 +61,7 @@ function M.check()
   else
     h.info("toolchain_path unset; children inherit $PATH")
   end
-  report_tool(
-    "arm-none-eabi-gcc",
-    vim.fn.exepath("arm-none-eabi-gcc"),
-    "toolchain_path"
-  )
+  report_tool("arm-none-eabi-gcc", tools.gcc(cfg), "toolchain_path")
   report_tool("cmake", vim.fn.exepath("cmake"), nil)
   for _, gen in ipairs({ "ninja", "make" }) do
     local path = vim.fn.exepath(gen)

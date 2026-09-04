@@ -93,6 +93,60 @@ describe("nvim-stm32.tools.resolve tilde expansion", function()
   end)
 end)
 
+describe("nvim-stm32.tools.gcc", function()
+  local dir, exe
+
+  before_each(function()
+    dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    exe = dir .. "/arm-none-eabi-gcc"
+    vim.fn.writefile({ "#!/bin/sh" }, exe)
+    vim.uv.fs_chmod(exe, 493) -- 0755
+  end)
+
+  after_each(function()
+    vim.fn.delete(dir, "rf")
+  end)
+
+  it("finds a compiler inside toolchain_path that is not on $PATH", function()
+    local cfg = config.resolve({ toolchain_path = dir })
+    assert.equals(exe, tools.gcc(cfg))
+  end)
+end)
+
+describe("nvim-stm32.tools.gdb", function()
+  local dir, exe, override_dir, override_exe
+
+  before_each(function()
+    dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    exe = dir .. "/arm-none-eabi-gdb"
+    vim.fn.writefile({ "#!/bin/sh" }, exe)
+    vim.uv.fs_chmod(exe, 493) -- 0755
+
+    override_dir = vim.fn.tempname()
+    vim.fn.mkdir(override_dir, "p")
+    override_exe = override_dir .. "/arm-none-eabi-gdb"
+    vim.fn.writefile({ "#!/bin/sh" }, override_exe)
+    vim.uv.fs_chmod(override_exe, 493) -- 0755
+  end)
+
+  after_each(function()
+    vim.fn.delete(dir, "rf")
+    vim.fn.delete(override_dir, "rf")
+  end)
+
+  it("finds a debugger inside toolchain_path that is not on $PATH", function()
+    local cfg = config.resolve({ toolchain_path = dir })
+    assert.equals(exe, tools.gdb(cfg))
+  end)
+
+  it("prefers an explicit gdb_path over toolchain_path when both are set", function()
+    local cfg = config.resolve({ toolchain_path = dir, gdb_path = override_exe })
+    assert.equals(override_exe, tools.gdb(cfg))
+  end)
+end)
+
 describe("nvim-stm32.tools.child_path", function()
   it("prepends toolchain_path to the inherited PATH", function()
     local cfg = config.resolve({ toolchain_path = "/opt/arm/bin" })
