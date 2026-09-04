@@ -3,8 +3,8 @@
   "id": "app::@6890427a1f51a3e7e1df",
   "type": "EXECUTABLE",
   "paths": {
-    "source": ".",
-    "build": "."
+    "source": "app",
+    "build": "app"
   },
   "artifacts": [
     { "path": "app.elf" }

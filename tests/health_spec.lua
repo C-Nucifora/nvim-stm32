@@ -85,6 +85,7 @@ describe("nvim-stm32.health.cmake_project_status", function()
       vim.json.encode({
         kind = "codemodel",
         version = { major = 2 },
+        paths = { source = root, build = binary },
         configurations = { { targets = {} } },
       }),
     }, replies .. "/codemodel-test.json")

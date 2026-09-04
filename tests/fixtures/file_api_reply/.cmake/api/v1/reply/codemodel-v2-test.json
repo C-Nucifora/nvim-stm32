@@ -10,8 +10,8 @@
       "name": "Debug",
       "directories": [
         {
-          "source": ".",
-          "build": "."
+          "source": "firmware/cm4",
+          "build": "firmware/cm4"
         }
       ],
       "targets": [

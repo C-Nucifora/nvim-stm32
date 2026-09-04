@@ -59,6 +59,7 @@ local function write_reply(root, target_name)
   write_json(replies .. "/codemodel-test.json", {
     kind = "codemodel",
     version = { major = 2 },
+    paths = { source = root, build = binary },
     configurations = {
       {
         targets = { { name = target_name, jsonFile = "target-test.json" } },

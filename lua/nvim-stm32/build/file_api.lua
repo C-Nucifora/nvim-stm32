@@ -104,7 +104,13 @@ local function valid_codemodel(codemodel)
     codemodel.kind ~= "codemodel"
     or type(codemodel.version) ~= "table"
     or codemodel.version.major ~= 2
-    or (codemodel.paths ~= nil and type(codemodel.paths) ~= "table")
+    or type(codemodel.paths) ~= "table"
+    or type(codemodel.paths.source) ~= "string"
+    or codemodel.paths.source == ""
+    or not is_absolute(codemodel.paths.source)
+    or type(codemodel.paths.build) ~= "string"
+    or codemodel.paths.build == ""
+    or not is_absolute(codemodel.paths.build)
     or not is_dense_array(codemodel.configurations)
   then
     return false
@@ -128,20 +134,6 @@ local function valid_codemodel(codemodel)
         or directory.build == ""
       then
         return false
-      end
-      if not is_absolute(directory.source) then
-        if
-          type(codemodel.paths) ~= "table" or type(codemodel.paths.source) ~= "string"
-        then
-          return false
-        end
-      end
-      if not is_absolute(directory.build) then
-        if
-          type(codemodel.paths) ~= "table" or type(codemodel.paths.build) ~= "string"
-        then
-          return false
-        end
       end
     end
     for _, target in ipairs(configuration.targets) do

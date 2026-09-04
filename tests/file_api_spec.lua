@@ -20,6 +20,7 @@ local function valid_codemodel(target_file)
   return {
     kind = "codemodel",
     version = { major = 2 },
+    paths = { source = "/source", build = "/build" },
     configurations = {
       {
         targets = { { name = "app", jsonFile = target_file } },
@@ -74,9 +75,9 @@ describe("nvim-stm32 CMake File API", function()
     assert.same({
       name = "app",
       type = "EXECUTABLE",
-      source_dir = "/placeholder/source",
-      build_dir = "/placeholder/build",
-      artifacts = { "/placeholder/build/app.elf" },
+      source_dir = "/placeholder/source/firmware/cm4/app",
+      build_dir = "/placeholder/build/firmware/cm4/app",
+      artifacts = { "/placeholder/build/firmware/cm4/app/app.elf" },
       linker_command_fragments = {
         "arm-none-eabi-gcc",
         "-Wl,-Tapp.ld",
@@ -101,6 +102,42 @@ describe("nvim-stm32 CMake File API", function()
 
     local reply = assert(file_api.reply(root))
     assert.equals("app", reply.targets[1].name)
+    vim.fn.delete(root, "rf")
+  end)
+
+  it("skips a newer codemodel with relative top-level paths", function()
+    local root = vim.fn.tempname()
+    local replies = reply_dir(root)
+    write_json(replies .. "/target-app.json", valid_target())
+    write_json(replies .. "/codemodel-old.json", valid_codemodel("target-app.json"))
+    write_index(replies .. "/index-old.json", "codemodel-old.json", 100)
+    write_json(replies .. "/codemodel-new.json", {
+      kind = "codemodel",
+      version = { major = 2 },
+      paths = { source = "src", build = "build" },
+      configurations = {
+        { directories = { { source = "firmware", build = "firmware" } }, targets = {} },
+      },
+    })
+    write_index(replies .. "/index-new.json", "codemodel-new.json", 200)
+
+    local reply = assert(file_api.reply(root))
+    assert.equals("app", reply.targets[1].name)
+    vim.fn.delete(root, "rf")
+  end)
+
+  it("returns a codemodel error without top-level paths", function()
+    local root = vim.fn.tempname()
+    local replies = reply_dir(root)
+    write_json(replies .. "/codemodel.json", {
+      kind = "codemodel",
+      version = { major = 2 },
+      configurations = {},
+    })
+    write_index(replies .. "/index-test.json", "codemodel.json", 100)
+
+    local _, err = file_api.reply(root)
+    assert.equals("cmake-file-api-codemodel", err.code)
     vim.fn.delete(root, "rf")
   end)
 
@@ -156,6 +193,7 @@ describe("nvim-stm32 CMake File API", function()
     write_json(reply_dir .. "/codemodel-v2-test.json", {
       kind = "codemodel",
       version = { major = 2 },
+      paths = { source = "/source", build = "/build" },
       configurations = {
         {
           targets = { { name = "app", jsonFile = "target-app-test.json" } },
