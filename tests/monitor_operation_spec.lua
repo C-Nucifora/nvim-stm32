@@ -266,6 +266,18 @@ describe("nvim-stm32 monitor operation lifecycle", function()
     assert.equals("cat: device disconnected\n", result.error.output)
   end)
 
+  it("reports a zero-exit signalled stream as disconnected", function()
+    local result = monitor.complete(planned, {
+      code = 0,
+      signal = 15,
+      command_index = 2,
+      output = "terminated",
+    })
+
+    assert.is_false(result.ok)
+    assert.equals("monitor-disconnected", result.error.code)
+  end)
+
   it("revalidates the selected device before starting setup", function()
     local starts = 0
     process.system = function()

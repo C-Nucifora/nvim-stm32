@@ -2,6 +2,7 @@ local model = require("nvim-stm32.model")
 local nvim_stm32 = require("nvim-stm32")
 local analyze = require("nvim-stm32.operations.analyze")
 local operation = require("nvim-stm32.operation")
+local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
 local tools = require("nvim-stm32.tools")
 
@@ -48,18 +49,22 @@ local function artifact(root, kind, configuration, path, build_id)
   elseif build_id == false then
     build_id = nil
   end
+  local artifact_path = path or root .. "/build/Debug/dt." .. kind
+  local stat = assert(vim.uv.fs_stat(artifact_path))
   return model.artifact({
     image_id = "application",
     configuration = configuration or "Debug",
     kind = kind,
-    path = path or root .. "/build/Debug/dt." .. kind,
+    path = artifact_path,
     build_target = "dt",
-    modified_ns = 1,
+    modified_ns = stat.mtime.sec * 1000000000 + stat.mtime.nsec,
+    size = stat.size,
     build_id = build_id,
   })
 end
 
 local function record_artifacts(root, artifacts)
+  session.select(root, { configuration = "Debug" })
   session.record(root, {
     ok = true,
     code = 0,
@@ -74,6 +79,7 @@ describe("nvim-stm32 analysis operation", function()
   local toolchain
   local original_size
   local original_objdump
+  local original_process_run
 
   before_each(function()
     root = vim.fn.tempname()
@@ -100,11 +106,13 @@ describe("nvim-stm32 analysis operation", function()
     session.clear()
     original_size = tools.size
     original_objdump = tools.objdump
+    original_process_run = process.run
   end)
 
   after_each(function()
     tools.size = original_size
     tools.objdump = original_objdump
+    process.run = original_process_run
     session.clear()
     vim.fn.delete(root, "rf")
     vim.fn.delete(toolchain, "rf")
@@ -146,6 +154,7 @@ describe("nvim-stm32 analysis operation", function()
     assert.equals("application", plan.commands[1].image_id)
     assert.equals("short", plan.commands[1].lifecycle)
     assert.equals(root .. "/build/Debug/dt.map", plan.metadata.inputs[1].map.path)
+    assert.same({ { kind = "project-artifacts", id = root } }, plan.locks)
   end)
 
   it("rejects an ELF from the wrong configuration", function()
@@ -155,6 +164,69 @@ describe("nvim-stm32 analysis operation", function()
 
     assert.is_nil(plan)
     assert.equals("analysis-elf-missing", err.code)
+  end)
+
+  local function expect_preflight_failure(plan, expected_code)
+    local starts = 0
+    local result
+    process.run = function()
+      starts = starts + 1
+    end
+    operation.run(plan, {}, function(value)
+      result = value
+    end)
+    assert.equals(0, starts)
+    assert.is_false(result.ok)
+    assert.equals(expected_code, result.error.code)
+  end
+
+  it("rejects an ELF modified after analysis planning before size starts", function()
+    local elf = artifact(root, "elf")
+    record_artifacts(root, { elf })
+    local plan = assert(analyze.plan(project(root), opts()))
+    local stat = assert(vim.uv.fs_stat(elf.path))
+    vim.fn.writefile({ "ELF" }, elf.path)
+    assert(vim.uv.fs_utime(elf.path, stat.atime.sec, stat.mtime.sec + 10))
+
+    expect_preflight_failure(plan, "analysis-artifact-changed")
+  end)
+
+  it("rejects an ELF whose real path changes after analysis planning", function()
+    local elf = artifact(root, "elf")
+    record_artifacts(root, { elf })
+    local plan = assert(analyze.plan(project(root), opts()))
+    local outside = root .. "/outside.elf"
+    vim.fn.writefile({ "elf" }, outside)
+    assert.equals(0, vim.fn.delete(elf.path))
+    assert(vim.uv.fs_symlink(outside, elf.path))
+
+    expect_preflight_failure(plan, "analysis-artifact-outside-build")
+  end)
+
+  it("rejects a changed selected configuration before analysis starts", function()
+    local elf = artifact(root, "elf")
+    record_artifacts(root, { elf })
+    local plan = assert(analyze.plan(project(root), opts()))
+    session.select(root, { configuration = "Release" })
+
+    expect_preflight_failure(plan, "analysis-configuration-changed")
+  end)
+
+  it("rejects a changed successful build id before analysis starts", function()
+    local elf = artifact(root, "elf")
+    record_artifacts(root, { elf })
+    local plan = assert(analyze.plan(project(root), opts()))
+    session.select(root, {
+      last_result = {
+        ok = true,
+        code = 0,
+        output = "rebuilt",
+        artifacts = {},
+        metadata = { operation_id = "build-2" },
+      },
+    })
+
+    expect_preflight_failure(plan, "analysis-build-changed")
   end)
 
   it("rejects a missing ELF", function()
@@ -167,8 +239,9 @@ describe("nvim-stm32 analysis operation", function()
   end)
 
   it("rejects several matching ELF artifacts", function()
-    local second = artifact(root, "elf", "Debug", root .. "/build/Debug/other.elf")
-    vim.fn.writefile({ "elf" }, second.path)
+    local second_path = root .. "/build/Debug/other.elf"
+    vim.fn.writefile({ "elf" }, second_path)
+    local second = artifact(root, "elf", "Debug", second_path)
     record_artifacts(root, { artifact(root, "elf"), second })
 
     local plan, err = analyze.plan(project(root), opts())
@@ -224,6 +297,21 @@ describe("nvim-stm32 analysis operation", function()
     assert.is_false(result.ok)
     assert.equals("process-failed", result.error.code)
     assert.same({}, result.artifacts)
+  end)
+
+  it("rejects zero-exit analysis terminated by a signal", function()
+    record_artifacts(root, { artifact(root, "elf") })
+    local plan = assert(analyze.plan(project(root), opts()))
+
+    local result = analyze.complete(plan, {
+      code = 0,
+      signal = 15,
+      output = "terminated",
+      commands = {},
+    })
+
+    assert.is_false(result.ok)
+    assert.equals("process-failed", result.error.code)
   end)
 
   it("parses separate command outputs into successful metadata", function()

@@ -38,6 +38,7 @@ trap 'cleanup_signal 143' TERM
 cd "$repo_dir"
 scripts/test.sh
 stylua --check lua/ tests/
+tests/integration/normal-neovim-rpc.sh
 
 discovery_status=0
 scripts/validate-corpus.sh "$corpus_root" > "$discovery_log" 2>&1 \

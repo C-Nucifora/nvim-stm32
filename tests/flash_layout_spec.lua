@@ -84,6 +84,19 @@ local function context(root, images, flash_order, overrides)
   }
 end
 
+local function load_section(name, address, size)
+  return {
+    index = 0,
+    name = name,
+    size = size,
+    vma = address,
+    lma = address,
+    file_offset = 0x1000,
+    alignment = 4,
+    flags = { "CONTENTS", "ALLOC", "LOAD", "READONLY", "CODE" },
+  }
+end
+
 describe("nvim-stm32 flash layout", function()
   local root
 
@@ -101,13 +114,20 @@ describe("nvim-stm32 flash layout", function()
       local app = image(root, "application")
       local elf = artifact(root, "application", "elf")
 
-      local resolved = assert(layout.resolve(context(root, { app }), { elf }, backend))
+      local resolved = assert(
+        layout.resolve(
+          context(root, { app }),
+          { elf },
+          backend,
+          { sections = { application = { load_section(".text", 0x08000000, 8) } } }
+        )
+      )
 
       assert.equals(1, #resolved)
       assert.equals("application", resolved[1].image_id)
       assert.equals(vim.uv.fs_realpath(elf.path), resolved[1].artifact.path)
       assert.equals(0x08000000, resolved[1].address)
-      assert.equals(vim.uv.fs_stat(elf.path).size, resolved[1].size)
+      assert.equals(8, resolved[1].size)
       assert.same({
         name = "FLASH",
         attributes = "rx",
@@ -116,6 +136,66 @@ describe("nvim-stm32 flash layout", function()
       }, resolved[1].region)
     end)
   end
+
+  it("uses ELF load ranges instead of debug-heavy filesystem size", function()
+    local app = image(
+      root,
+      "application",
+      nil,
+      "MEMORY\n{\nFLASH (rx) : ORIGIN = 0x08000000, LENGTH = 16\n}"
+    )
+    local elf = artifact(root, "application", "elf", {
+      contents = string.rep("debug", 100),
+    })
+
+    local resolved = assert(
+      layout.resolve(
+        context(root, { app }),
+        { elf },
+        "openocd",
+        { sections = { application = { load_section(".text", 0x08000000, 8) } } }
+      )
+    )
+
+    assert.equals(0x08000000, resolved[1].address)
+    assert.equals(8, resolved[1].size)
+    assert.same({ { start = 0x08000000, finish = 0x08000008 } }, resolved[1].ranges)
+  end)
+
+  it("rejects an ELF load range outside FLASH even when its file is tiny", function()
+    local app = image(root, "application")
+    local elf = artifact(root, "application", "elf", { contents = "x" })
+
+    local resolved, err = layout.resolve(
+      context(root, { app }),
+      { elf },
+      "cubeprogrammer",
+      { sections = { application = { load_section(".text", 0x08200000, 8) } } }
+    )
+
+    assert.is_nil(resolved)
+    assert.equals("flash-range-outside-region", err.code)
+  end)
+
+  it("detects ELF overlap from embedded load ranges", function()
+    local first = image(root, "first", 0x08000000)
+    local second = image(root, "second", 0x08100000)
+    local artifacts = {
+      artifact(root, "first", "elf", { contents = "a" }),
+      artifact(root, "second", "elf", { contents = "b" }),
+    }
+
+    local resolved, err =
+      layout.resolve(context(root, { first, second }), artifacts, "openocd", {
+        sections = {
+          first = { load_section(".text", 0x08000000, 16) },
+          second = { load_section(".text", 0x08000008, 16) },
+        },
+      })
+
+    assert.is_nil(resolved)
+    assert.equals("flash-range-overlap", err.code)
+  end)
 
   it("accepts one fresh BIN with an explicit aligned address", function()
     local app = image(root, "application", 0x08004000)
@@ -173,7 +253,14 @@ describe("nvim-stm32 flash layout", function()
       layout.resolve(
         context(root, { boot, app, settings }, { "app" }),
         artifacts,
-        "openocd"
+        "openocd",
+        {
+          sections = {
+            boot = { load_section(".text", 0x08000000, 8) },
+            app = { load_section(".text", 0x08010000, 8) },
+            settings = { load_section(".text", 0x08180000, 8) },
+          },
+        }
       )
     )
 

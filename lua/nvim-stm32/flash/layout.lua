@@ -251,7 +251,60 @@ local function valid_address(address)
     and address % 4 == 0
 end
 
-local function resolve_image(context, artifacts, image, kind, binary_real)
+local function flag_set(flags)
+  local found = {}
+  for _, flag in ipairs(flags or {}) do
+    found[flag] = true
+  end
+  return found
+end
+
+local function elf_ranges(sections, region, image)
+  if type(sections) ~= "table" then
+    return nil,
+      layout_error(
+        "flash-elf-layout-unvalidated",
+        "ELF load sections were not inspected for " .. image.id,
+        image.id
+      )
+  end
+  local ranges = {}
+  local total = 0
+  for _, section in ipairs(sections) do
+    local flags = flag_set(section.flags)
+    if section.size > 0 and flags.ALLOC and flags.LOAD then
+      local finish = section.lma + section.size
+      if
+        section.lma < region.origin
+        or finish > region.origin + region.length
+        or finish > 0x100000000
+      then
+        return nil,
+          layout_error(
+            "flash-range-outside-region",
+            "ELF section " .. section.name .. " exceeds FLASH for " .. image.id,
+            image.id
+          )
+      end
+      ranges[#ranges + 1] = { start = section.lma, finish = finish }
+      total = total + section.size
+    end
+  end
+  if #ranges == 0 then
+    return nil,
+      layout_error(
+        "flash-elf-layout-empty",
+        "ELF has no allocated load sections for " .. image.id,
+        image.id
+      )
+  end
+  table.sort(ranges, function(left, right)
+    return left.start < right.start
+  end)
+  return ranges, total
+end
+
+local function resolve_image(context, artifacts, image, kind, binary_real, opts)
   local artifact, artifact_err = artifact_for(context, artifacts, image, kind)
   if not artifact then
     return nil, artifact_err
@@ -264,6 +317,31 @@ local function resolve_image(context, artifacts, image, kind, binary_real)
   if not region then
     return nil, region_err
   end
+  if kind == "elf" then
+    if opts.defer_elf then
+      return {
+        image_id = image.id,
+        artifact = checked,
+        embedded_address = true,
+        region = vim.deepcopy(region),
+      }
+    end
+    local ranges, total_or_err =
+      elf_ranges(opts.sections and opts.sections[image.id], region, image)
+    if not ranges then
+      return nil, total_or_err
+    end
+    return {
+      image_id = image.id,
+      artifact = checked,
+      address = ranges[1].start,
+      size = total_or_err,
+      ranges = ranges,
+      embedded_address = true,
+      region = vim.deepcopy(region),
+    }
+  end
+
   local address = image.flash and image.flash.address or region.origin
   if not valid_address(address) then
     return nil,
@@ -286,11 +364,13 @@ local function resolve_image(context, artifacts, image, kind, binary_real)
     artifact = checked,
     address = address,
     size = size,
+    ranges = { { start = address, finish = address + size } },
     region = vim.deepcopy(region),
   }
 end
 
-function M.resolve(context, artifacts, backend)
+function M.resolve(context, artifacts, backend, opts)
+  opts = opts or {}
   vim.validate("context", context, "table")
   vim.validate("context.project", context.project, "table")
   vim.validate("context.images", context.images, "table")
@@ -314,7 +394,8 @@ function M.resolve(context, artifacts, backend)
 
   local resolved = {}
   for _, image in ipairs(ordered_images(context)) do
-    local item, item_err = resolve_image(context, artifacts, image, kind, binary_real)
+    local item, item_err =
+      resolve_image(context, artifacts, image, kind, binary_real, opts)
     if not item then
       return nil, item_err
     end
@@ -323,18 +404,22 @@ function M.resolve(context, artifacts, backend)
   for left_index, left in ipairs(resolved) do
     for right_index = left_index + 1, #resolved do
       local right = resolved[right_index]
-      if
-        left.address < right.address + right.size
-        and right.address < left.address + left.size
-      then
-        return nil,
-          layout_error(
-            "flash-range-overlap",
-            "selected image ranges overlap: "
-              .. left.image_id
-              .. " and "
-              .. right.image_id
-          )
+      for _, left_range in ipairs(left.ranges or {}) do
+        for _, right_range in ipairs(right.ranges or {}) do
+          if
+            left_range.start < right_range.finish
+            and right_range.start < left_range.finish
+          then
+            return nil,
+              layout_error(
+                "flash-range-overlap",
+                "selected image ranges overlap: "
+                  .. left.image_id
+                  .. " and "
+                  .. right.image_id
+              )
+          end
+        end
       end
     end
   end

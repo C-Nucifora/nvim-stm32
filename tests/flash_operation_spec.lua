@@ -95,6 +95,7 @@ local function artifact(root, id, kind, build_id, contents)
 end
 
 local function cube_opts(root, artifacts)
+  executable(root, "arm-none-eabi-objdump")
   return {
     backend = "cubeprogrammer",
     programmer_path = executable(root, "STM32_Programmer_CLI"),
@@ -102,6 +103,7 @@ local function cube_opts(root, artifacts)
     probe = { backend = "cubeprogrammer", serial = "ABC123" },
     artifacts = artifacts,
     build_id = "build-1",
+    toolchain_path = root .. "/tools",
   }
 end
 
@@ -129,7 +131,8 @@ describe("nvim-stm32 flash operation plans", function()
 
     assert.equals("flash", plan.kind)
     assert.same({ "application" }, plan.images)
-    assert.same({ kind = "probe", id = "cubeprogrammer:ABC123" }, plan.locks[1])
+    assert.same({ kind = "project-artifacts", id = root }, plan.locks[1])
+    assert.same({ kind = "probe", id = "ABC123" }, plan.locks[2])
     assert.equals("once-after-verify", plan.reset_policy)
     assert.same({
       opts.programmer_path,
@@ -205,6 +208,42 @@ describe("nvim-stm32 flash operation plans", function()
     )
     assert.same({}, plan.metadata.layout)
     assert.equals("once", plan.reset_policy)
+  end)
+
+  it("uses one normalized physical probe lock across programmer backends", function()
+    local source = project(root, { image(root, "application") })
+    local cube = cube_opts(root)
+    cube.probe = { backend = "cubeprogrammer", serial = "0xabc123" }
+    local openocd_path = executable(root, "openocd")
+
+    local cube_plan = assert(flash.plan("reset", source, cube))
+    local openocd_plan = assert(flash.plan("reset", source, {
+      backend = "openocd",
+      openocd_path = openocd_path,
+      probe = { backend = "openocd", serial = "ABC123" },
+    }))
+
+    assert.same({ kind = "probe", id = "ABC123" }, cube_plan.locks[1])
+    assert.same(cube_plan.locks, openocd_plan.locks)
+    local release = assert(require("nvim-stm32.locks").acquire("cube", cube_plan.locks))
+    local competing, err =
+      require("nvim-stm32.locks").acquire("openocd", openocd_plan.locks)
+    assert.is_nil(competing)
+    assert.equals("operation-lock-contended", err.code)
+    release()
+  end)
+
+  it("does not conflate different normalized probe serials", function()
+    local source = project(root, { image(root, "application") })
+    local first_opts = cube_opts(root)
+    first_opts.probe = { backend = "cubeprogrammer", serial = "ABC123" }
+    local second_opts = cube_opts(root)
+    second_opts.probe = { backend = "cubeprogrammer", serial = "ABC124" }
+
+    local first = assert(flash.plan("reset", source, first_opts))
+    local second = assert(flash.plan("reset", source, second_opts))
+
+    assert.not_equals(first.locks[1].id, second.locks[1].id)
   end)
 
   it("requires confirmation for erase execution plans", function()
@@ -317,7 +356,7 @@ describe("nvim-stm32 flash operation plans", function()
       assert.matches("Backend: cubeprogrammer", text, 1, true)
       assert.matches("Probe: ABC123", text, 1, true)
       assert.matches("Artifact: " .. vim.uv.fs_realpath(elf.path), text, 1, true)
-      assert.matches("Address: 0x08000000", text, 1, true)
+      assert.matches("Address: embedded in ELF", text, 1, true)
       assert.matches("Phase: program-verify", text, 1, true)
       assert.matches("Reset policy: once-after-verify", text, 1, true)
     end
@@ -357,6 +396,7 @@ describe("nvim-stm32 flash operation execution", function()
   local original_execute
   local original_executable
   local original_config
+  local original_inspect_elf_command
 
   local function completed_handle(id)
     return {
@@ -445,6 +485,21 @@ describe("nvim-stm32 flash operation execution", function()
     original_execute = operation.execute
     original_executable = vim.fn.executable
     original_config = nvim_stm32.config
+    original_inspect_elf_command = flash.inspect_elf_command
+    flash.inspect_elf_command = function(_, item)
+      return {
+        {
+          index = 0,
+          name = ".text",
+          size = 8,
+          vma = item.region.origin,
+          lma = item.region.origin,
+          file_offset = 0x1000,
+          alignment = 4,
+          flags = { "CONTENTS", "ALLOC", "LOAD", "READONLY", "CODE" },
+        },
+      }
+    end
     vim.fn.executable = function()
       return 1
     end
@@ -456,6 +511,7 @@ describe("nvim-stm32 flash operation execution", function()
     operation.execute = original_execute
     vim.fn.executable = original_executable
     nvim_stm32.config = original_config
+    flash.inspect_elf_command = original_inspect_elf_command
     session.clear()
     vim.fn.delete(root, "rf")
   end)
@@ -643,6 +699,32 @@ describe("nvim-stm32 flash operation execution", function()
     assert.matches("verify failed", result.error.output, 1, true)
   end)
 
+  it("rejects zero-exit flash completion terminated by a signal", function()
+    local source = project(root, { image(root, "application") })
+    local elf = artifact(root, "application", "elf")
+    local plan = assert(flash.plan("flash", source, cube_opts(root, { elf })))
+
+    local result = flash.complete(plan, {
+      code = 0,
+      signal = 15,
+      output = "terminated",
+      command = plan.commands[2].argv,
+      command_index = 2,
+      commands = {
+        {
+          argv = plan.commands[1].argv,
+          output = "Device ID : 0x419",
+          code = 0,
+          signal = 0,
+        },
+        { argv = plan.commands[2].argv, output = "terminated", code = 0, signal = 15 },
+      },
+    })
+
+    assert.is_false(result.ok)
+    assert.equals("flash-command-failed", result.error.code)
+  end)
+
   it("resets exactly once after every image verifies", function()
     local boot = image(root, "boot", 0x08000000)
     local app = image(root, "app", 0x08100000)
@@ -697,6 +779,39 @@ describe("nvim-stm32 flash operation execution", function()
     assert.equals(0, calls)
     assert.is_false(result.ok)
     assert.equals("flash-artifact-changed", result.error.code)
+  end)
+
+  it("rejects invalid fake objdump load ranges before identity starts", function()
+    local source = project(root, { image(root, "application") })
+    local elf = artifact(root, "application", "elf")
+    local opts = cube_opts(root, { elf })
+    local objdump_path = root .. "/tools/arm-none-eabi-objdump"
+    write(
+      objdump_path,
+      [[#!/bin/sh
+printf '%s\n' 'fake.elf: file format elf32-littlearm'
+printf '%s\n' 'Sections:'
+printf '%s\n' 'Idx Name          Size      VMA       LMA       File off  Algn'
+printf '%s\n' '  0 .text         00000008  08200000  08200000  00001000  2**2'
+printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
+]]
+    )
+    vim.uv.fs_chmod(objdump_path, 493)
+    local plan = assert(flash.plan("flash", source, opts))
+    flash.inspect_elf_command = original_inspect_elf_command
+    local starts = 0
+    process.run = function()
+      starts = starts + 1
+    end
+    local result
+
+    flash.execute(plan, opts, function(value)
+      result = value
+    end)
+
+    assert.equals(0, starts)
+    assert.is_false(result.ok)
+    assert.equals("flash-range-outside-region", result.error.code)
   end)
 
   it("rejects altered phase metadata before identity connects", function()
@@ -771,6 +886,9 @@ describe("nvim-stm32 flash operation execution", function()
       result = value
     end)
 
+    assert.is_true(vim.wait(100, function()
+      return hardware_plan ~= nil
+    end))
     assert.equals("build-immediate", hardware_plan.metadata.build_id)
     assert.equals(
       vim.uv.fs_realpath(elf.path),
@@ -882,45 +1000,160 @@ describe("nvim-stm32 flash operation execution", function()
     assert.equals(programmer, hardware_plan.metadata.tools.program)
   end)
 
-  it("cancels the active build and ignores its racing callback", function()
+  it(
+    "waits for an accepted build cancellation and delivers its callback once",
+    function()
+      local source = project(root, { image(root, "application") })
+      local elf = artifact(root, "application", "elf", "build-race")
+      local opts = cube_opts(root)
+      opts.project = source
+      opts.artifacts = nil
+      local build_callback
+      local build_cancelled = 0
+      local hardware_calls = 0
+      build.run = function(_, callback)
+        build_callback = callback
+        return {
+          state = function()
+            return "running"
+          end,
+          cancel = function()
+            build_cancelled = build_cancelled + 1
+            return true
+          end,
+          pid = function()
+            return 44
+          end,
+        }
+      end
+      operation.execute = function()
+        hardware_calls = hardware_calls + 1
+      end
+      local callback_calls = 0
+      local result
+      local handle = flash.current("flash", opts, function(value)
+        callback_calls = callback_calls + 1
+        result = value
+      end)
+
+      assert.equals(44, handle.pid())
+      assert.is_true(handle.cancel("test"))
+      assert.equals(1, build_cancelled)
+      assert.equals("cancelling", handle.state())
+      assert.equals(0, hardware_calls)
+      assert.equals(0, callback_calls)
+
+      build_callback(model.result({
+        ok = false,
+        code = 0,
+        output = "terminated",
+        artifacts = {},
+        error = model.error({
+          code = "process-failed",
+          message = "nvim-stm32: build command did not complete successfully",
+          operation = "build",
+          hint = "inspect output",
+        }),
+        metadata = { operation_id = "build-race" },
+      }))
+
+      assert.equals(1, callback_calls)
+      assert.is_false(result.ok)
+      assert.equals("cancelled", handle.state())
+    end
+  )
+
+  it("preserves a queued build result when child cancellation is rejected", function()
     local source = project(root, { image(root, "application") })
-    local elf = artifact(root, "application", "elf", "build-race")
+    local elf = artifact(root, "application", "elf", "build-queued")
     local opts = cube_opts(root)
     opts.project = source
     opts.artifacts = nil
     local build_callback
-    local build_cancelled = 0
-    local hardware_calls = 0
     build.run = function(_, callback)
       build_callback = callback
       return {
         state = function()
-          return "running"
+          return "completing"
         end,
         cancel = function()
-          build_cancelled = build_cancelled + 1
-          return true
+          return false
         end,
         pid = function()
-          return 44
+          return nil
         end,
       }
     end
-    operation.execute = function()
-      hardware_calls = hardware_calls + 1
+    local hardware_callback
+    operation.execute = function(_, _, _, callback)
+      hardware_callback = callback
+      return completed_handle(91)
+    end
+    local callback_calls = 0
+    local result
+    local handle = flash.current("flash", opts, function(value)
+      callback_calls = callback_calls + 1
+      result = value
+    end)
+
+    assert.is_false(handle.cancel("late"))
+    build_callback(build_result({ elf }, "build-queued"))
+    assert.is_true(vim.wait(100, function()
+      return hardware_callback ~= nil
+    end))
+    hardware_callback(build_result({}))
+
+    assert.equals(1, callback_calls)
+    assert.is_true(result.ok)
+    assert.equals("completed", handle.state())
+  end)
+
+  it("keeps accepted hardware cancellation nonterminal until child exit", function()
+    local source = project(root, { image(root, "application") })
+    local opts = cube_opts(root)
+    opts.project = source
+    opts.build = false
+    opts.artifacts = { artifact(root, "application", "elf", "build-running") }
+    opts.build_id = "build-running"
+    local hardware_callback
+    operation.execute = function(_, _, _, callback)
+      hardware_callback = callback
+      return {
+        state = function()
+          return "cancelling"
+        end,
+        cancel = function()
+          return true
+        end,
+        pid = function()
+          return 92
+        end,
+      }
     end
     local callback_calls = 0
     local handle = flash.current("flash", opts, function()
       callback_calls = callback_calls + 1
     end)
 
-    assert.equals(44, handle.pid())
     assert.is_true(handle.cancel("test"))
-    build_callback(build_result({ elf }, "build-race"))
-
-    assert.equals(1, build_cancelled)
-    assert.equals(0, hardware_calls)
+    assert.equals("cancelling", handle.state())
     assert.equals(0, callback_calls)
+
+    hardware_callback(model.result({
+      ok = false,
+      code = 0,
+      output = "terminated",
+      artifacts = {},
+      error = model.error({
+        code = "flash-command-failed",
+        message = "nvim-stm32: flash command did not complete successfully",
+        operation = "flash",
+        hint = "inspect output",
+      }),
+      metadata = { operation_id = "flash-running" },
+    }))
+
+    assert.equals(1, callback_calls)
     assert.equals("cancelled", handle.state())
   end)
 
@@ -952,6 +1185,9 @@ describe("nvim-stm32 flash operation execution", function()
 
     local handle = flash.current("flash", opts, function() end)
 
+    assert.is_true(vim.wait(100, function()
+      return handle.pid() == 46
+    end))
     assert.equals(46, handle.pid())
     assert.is_true(handle.cancel("test"))
     assert.equals(1, hardware_cancelled)

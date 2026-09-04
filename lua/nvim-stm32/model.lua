@@ -126,6 +126,7 @@ function M.artifact(spec)
   required_string("artifact.configuration", out.configuration)
   required_string("artifact.build_target", out.build_target)
   vim.validate("artifact.modified_ns", out.modified_ns, "number")
+  vim.validate("artifact.size", out.size, "number", true)
   out.path = vim.fs.normalize(out.path)
   out.provenance = out.provenance or {}
   vim.validate("artifact.provenance", out.provenance, "table")

@@ -3,6 +3,14 @@ local M = { system = vim.system }
 local DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 local next_operation_id = 0
 
+function M.succeeded(result)
+  return type(result) == "table"
+    and result.code == 0
+    and (result.signal or 0) == 0
+    and result.cancelled ~= true
+    and result.timed_out ~= true
+end
+
 local function close_timer(timer)
   if not timer or timer:is_closing() then
     return
@@ -218,7 +226,7 @@ function M.run(commands, opts, callback)
         if finished then
           return
         end
-        if cancelled or result.code ~= 0 then
+        if cancelled or result.code ~= 0 or (result.signal or 0) ~= 0 then
           finish(result.code, result.signal, command.argv)
           return
         end

@@ -158,7 +158,7 @@ describe("nvim-stm32 build operation plans", function()
       { "cmake", "--build", "--preset", "Debug", "--target", "app" },
       plan.commands[2].argv
     )
-    assert.same({}, plan.locks)
+    assert.same({ { kind = "project-artifacts", id = root } }, plan.locks)
     assert.equals("none", plan.reset_policy)
     assert.equals("Debug", plan.metadata.configuration.name)
     assert.equals(
@@ -385,6 +385,35 @@ describe("nvim-stm32 operation execution", function()
     assert.equals(1, #result.artifacts)
     assert.equals(root .. "/build/Debug/Debug/app.elf", result.elf)
   end)
+
+  it(
+    "does not record artifacts from a zero-exit build terminated by a signal",
+    function()
+      local planned = assert(build.plan(project(root), { configuration = "Debug" }))
+      local result
+      vim.fn.executable = function()
+        return 1
+      end
+      process.run = function(commands, _, callback)
+        write_reply(root, "app")
+        callback({
+          code = 0,
+          signal = 15,
+          output = "terminated",
+          command = commands[2].argv,
+        })
+        return { id = 12 }
+      end
+
+      operation.run(planned, {}, function(value)
+        result = value
+      end)
+
+      assert.is_false(result.ok)
+      assert.same({}, session.get(root).artifacts)
+      assert.is_nil(session.get(root).last_result)
+    end
+  )
 
   it("uses the build preset's File API configuration", function()
     preset_document(root, { "host-debug" }, { ["host-debug"] = "Debug" })
@@ -690,6 +719,42 @@ describe("nvim-stm32 operation execution", function()
       reacquired()
     end
   )
+
+  it("acquires operation locks before artifact preflight", function()
+    local planned = generic_plan("flash-preflight-lock", "preflight-lock")
+    vim.fn.executable = function()
+      return 1
+    end
+    local result
+    process.run = function(_, _, callback)
+      callback({ code = 0, signal = 0, output = "ok" })
+      return { id = 76 }
+    end
+
+    operation.execute(planned, {}, {
+      preflight = function()
+        local competing, err = locks.acquire("preflight-competitor", planned.locks)
+        assert.is_nil(competing)
+        assert.equals("operation-lock-contended", err.code)
+        return true
+      end,
+      complete = function(plan, process_result)
+        return model.result({
+          ok = true,
+          code = process_result.code,
+          output = process_result.output,
+          artifacts = {},
+          metadata = { operation_id = plan.id },
+        })
+      end,
+    }, function(value)
+      result = value
+    end)
+
+    assert.is_true(result.ok)
+    local release = assert(locks.acquire("post-completion", planned.locks))
+    release()
+  end)
 
   it("releases locks after process failure and after-command rejection", function()
     vim.fn.executable = function()

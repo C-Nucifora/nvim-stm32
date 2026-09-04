@@ -16,6 +16,6 @@ if [ ! -d "$1" ]; then
   exit 2
 fi
 
-repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 exec nvim --headless --noplugin -u "$repo_dir/tests/minimal_init.lua" \
   -l "$repo_dir/scripts/validate_corpus.lua" -- "$@"

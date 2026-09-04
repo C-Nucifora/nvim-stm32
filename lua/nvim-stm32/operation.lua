@@ -125,6 +125,14 @@ function M.execute(plan, opts, hooks, callback)
     vim.deepcopy(require("nvim-stm32").get_config()),
     vim.deepcopy(opts)
   )
+
+  local lock_err
+  release, lock_err = locks.acquire(copied.id, copied.locks)
+  if not release then
+    complete(result_for_failure(copied, lock_err))
+    return safe_handle(copied.id)
+  end
+
   if hooks.preflight then
     local preflight_ok, preflight_result, preflight_err =
       pcall(hooks.preflight, copied, cfg)
@@ -141,13 +149,6 @@ function M.execute(plan, opts, hooks, callback)
       complete(result_for_failure(copied, preflight_err))
       return safe_handle(copied.id)
     end
-  end
-
-  local lock_err
-  release, lock_err = locks.acquire(copied.id, copied.locks)
-  if not release then
-    complete(result_for_failure(copied, lock_err))
-    return safe_handle(copied.id)
   end
 
   local process_opts = {
@@ -228,6 +229,7 @@ local function analyze_hooks()
         error("plan.metadata.inputs: expected table")
       end
     end,
+    preflight = analyze.preflight,
     complete = analyze.complete,
   }
 end

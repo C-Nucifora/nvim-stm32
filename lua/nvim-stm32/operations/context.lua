@@ -4,6 +4,13 @@ local session = require("nvim-stm32.session")
 
 local M = {}
 
+function M.artifact_lock(project)
+  return {
+    kind = "project-artifacts",
+    id = vim.fs.normalize(project.id or project.root),
+  }
+end
+
 local function selection_error(code, message, hint)
   return model.error({
     code = code,

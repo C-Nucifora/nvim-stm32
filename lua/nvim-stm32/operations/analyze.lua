@@ -1,6 +1,7 @@
 local model = require("nvim-stm32.model")
 local context = require("nvim-stm32.operations.context")
 local objdump = require("nvim-stm32.inspect.objdump")
+local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
 local size = require("nvim-stm32.inspect.size")
 local tools = require("nvim-stm32.tools")
@@ -8,6 +9,15 @@ local tools = require("nvim-stm32.tools")
 local M = {}
 
 local next_plan_id = 0
+
+local function modified_ns(stat)
+  local mtime = stat.mtime or {}
+  return (mtime.sec or 0) * 1000000000 + (mtime.nsec or 0)
+end
+
+local function within(root, path)
+  return path == root or path:sub(1, #root + 1) == root .. "/"
+end
 
 local function analysis_error(code, message, image_id, output)
   return model.error({
@@ -40,6 +50,71 @@ end
 
 local function stem(path)
   return vim.fn.fnamemodify(vim.fn.fnamemodify(path, ":t"), ":r")
+end
+
+local function checked_artifact(state, image, configuration, artifact)
+  local build_id = state.last_result
+    and state.last_result.metadata
+    and state.last_result.metadata.operation_id
+  if state.configuration ~= configuration.name then
+    return nil,
+      analysis_error(
+        "analysis-configuration-changed",
+        "selected configuration is not the recorded artifact configuration",
+        image.id
+      )
+  end
+  if artifact.build_id ~= build_id then
+    return nil,
+      analysis_error(
+        "analysis-build-changed",
+        "ELF artifact is not tied to the last successful build",
+        image.id
+      )
+  end
+  local binary_real = vim.uv.fs_realpath(configuration.binary_dir)
+  local real = vim.uv.fs_realpath(artifact.path)
+  if
+    not binary_real
+    or not real
+    or not within(vim.fs.normalize(binary_real), vim.fs.normalize(real))
+  then
+    return nil,
+      analysis_error(
+        "analysis-artifact-outside-build",
+        "ELF artifact is outside the selected binary directory: " .. artifact.path,
+        image.id
+      )
+  end
+  local stat = vim.uv.fs_stat(real)
+  if not stat or stat.type ~= "file" then
+    return nil,
+      analysis_error(
+        "analysis-elf-missing",
+        "ELF artifact no longer exists: " .. artifact.path,
+        image.id
+      )
+  end
+  if
+    type(artifact.size) ~= "number"
+    or artifact.size ~= stat.size
+    or artifact.modified_ns ~= modified_ns(stat)
+  then
+    return nil,
+      analysis_error(
+        "analysis-artifact-changed",
+        "ELF artifact changed after its successful build: " .. artifact.path,
+        image.id
+      )
+  end
+  return {
+    artifact = vim.deepcopy(artifact),
+    binary_real = vim.fs.normalize(binary_real),
+    real_path = vim.fs.normalize(real),
+    size = stat.size,
+    modified_ns = modified_ns(stat),
+    build_id = build_id,
+  }
 end
 
 local function artifacts_for(state, image, configuration)
@@ -78,14 +153,9 @@ local function artifacts_for(state, image, configuration)
         image.id
       )
   end
-  local stat = vim.uv.fs_stat(elf.path)
-  if not stat or stat.type ~= "file" then
-    return nil,
-      analysis_error(
-        "analysis-elf-missing",
-        "ELF artifact no longer exists: " .. elf.path,
-        image.id
-      )
+  local snapshot, snapshot_err = checked_artifact(state, image, configuration, elf)
+  if not snapshot then
+    return nil, snapshot_err
   end
 
   local matching_maps = {}
@@ -100,7 +170,7 @@ local function artifacts_for(state, image, configuration)
       matching_maps[#matching_maps + 1] = artifact
     end
   end
-  return elf, #matching_maps == 1 and matching_maps[1] or nil
+  return snapshot, #matching_maps == 1 and matching_maps[1] or nil
 end
 
 local function linker_path(image)
@@ -138,8 +208,8 @@ function M.plan(project, opts)
   local state = session.get(resolved.project)
   local inputs = {}
   for _, image in ipairs(resolved.images) do
-    local elf, map_or_err = artifacts_for(state, image, resolved.configuration)
-    if not elf then
+    local snapshot, map_or_err = artifacts_for(state, image, resolved.configuration)
+    if not snapshot then
       return nil, map_or_err
     end
     local path, path_err = linker_path(image)
@@ -148,9 +218,14 @@ function M.plan(project, opts)
     end
     inputs[#inputs + 1] = {
       image_id = image.id,
-      elf = vim.deepcopy(elf),
+      elf = vim.deepcopy(snapshot.artifact),
       map = vim.deepcopy(map_or_err),
       linker_path = vim.fs.normalize(path),
+      binary_real = snapshot.binary_real,
+      real_path = snapshot.real_path,
+      size = snapshot.size,
+      modified_ns = snapshot.modified_ns,
+      build_id = snapshot.build_id,
     }
   end
 
@@ -196,7 +271,7 @@ function M.plan(project, opts)
       return image.id
     end, resolved.images),
     commands = commands,
-    locks = {},
+    locks = { context.artifact_lock(resolved.project) },
     reset_policy = "none",
     metadata = {
       configuration = resolved.configuration,
@@ -204,6 +279,90 @@ function M.plan(project, opts)
       project = resolved.project,
     },
   })
+end
+
+function M.preflight(plan)
+  local fresh_context, context_err = context.resolve(plan.metadata.project, {
+    configuration = plan.metadata.configuration.name,
+    images = plan.images,
+  })
+  if not fresh_context then
+    return nil, context_err
+  end
+  if not vim.deep_equal(fresh_context.configuration, plan.metadata.configuration) then
+    return nil,
+      analysis_error(
+        "analysis-configuration-changed",
+        "selected configuration changed after analysis planning"
+      )
+  end
+
+  local state = session.get(plan.project_id)
+  if state.configuration ~= plan.metadata.configuration.name then
+    return nil,
+      analysis_error(
+        "analysis-configuration-changed",
+        "selected configuration changed after analysis planning"
+      )
+  end
+  local build_id = state.last_result
+    and state.last_result.metadata
+    and state.last_result.metadata.operation_id
+  for _, input in ipairs(plan.metadata.inputs) do
+    if build_id ~= input.build_id then
+      return nil,
+        analysis_error(
+          "analysis-build-changed",
+          "successful build changed after analysis planning",
+          input.image_id
+        )
+    end
+    local recorded
+    for _, artifact in ipairs(state.artifacts or {}) do
+      if
+        artifact.image_id == input.image_id
+        and artifact.kind == "elf"
+        and artifact.configuration == plan.metadata.configuration.name
+        and artifact.build_id == input.build_id
+        and artifact.path == input.elf.path
+      then
+        recorded = artifact
+        break
+      end
+    end
+    if not recorded then
+      return nil,
+        analysis_error(
+          "analysis-build-changed",
+          "recorded ELF changed after analysis planning",
+          input.image_id
+        )
+    end
+    local checked, checked_err = checked_artifact(
+      state,
+      { id = input.image_id },
+      plan.metadata.configuration,
+      recorded
+    )
+    if not checked then
+      return nil, checked_err
+    end
+    if
+      checked.binary_real ~= input.binary_real
+      or checked.real_path ~= input.real_path
+      or checked.size ~= input.size
+      or checked.modified_ns ~= input.modified_ns
+      or not vim.deep_equal(checked.artifact, input.elf)
+    then
+      return nil,
+        analysis_error(
+          "analysis-artifact-changed",
+          "ELF artifact identity changed after analysis planning: " .. input.elf.path,
+          input.image_id
+        )
+    end
+  end
+  return true
 end
 
 local function read(path)
@@ -217,12 +376,12 @@ local function read(path)
 end
 
 function M.complete(plan, process_result)
-  if process_result.code ~= 0 then
+  if not process.succeeded(process_result) then
     return failure(
       plan,
       analysis_error(
         "process-failed",
-        "analysis command failed with exit code " .. tostring(process_result.code),
+        "analysis command did not complete successfully",
         nil,
         process_result.output
       ),

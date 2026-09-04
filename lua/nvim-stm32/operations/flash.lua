@@ -2,7 +2,11 @@ local context = require("nvim-stm32.operations.context")
 local driver_registry = require("nvim-stm32.drivers.flash")
 local layout = require("nvim-stm32.flash.layout")
 local model = require("nvim-stm32.model")
+local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
+local locks = require("nvim-stm32.locks")
+local objdump = require("nvim-stm32.inspect.objdump")
+local tool_resolver = require("nvim-stm32.tools")
 
 local M = {}
 
@@ -168,7 +172,7 @@ function M.plan(action, project, opts)
   if not driver then
     return nil, tools_or_err
   end
-  local tools = tools_or_err
+  local tool_paths = tools_or_err
   if
     type(driver.identify_command) ~= "function"
     or type(driver.parse_identity) ~= "function"
@@ -225,7 +229,9 @@ function M.plan(action, project, opts)
     local layout_context = vim.deepcopy(resolved)
     layout_context.build_id = build_id
     resolved_layout, resolved_err =
-      layout.resolve(layout_context, artifacts or {}, driver)
+      layout.resolve(layout_context, artifacts or {}, driver, {
+        defer_elf = driver.artifact_kind == "elf",
+      })
     if not resolved_layout then
       return nil, resolved_err
     end
@@ -233,7 +239,7 @@ function M.plan(action, project, opts)
 
   local commands, steps = {}, {}
   local identify, identify_err =
-    command(driver, "identify_command", tools.identify, probe, action)
+    command(driver, "identify_command", tool_paths.identify, probe, action)
   if not identify then
     return nil, identify_err
   end
@@ -241,11 +247,12 @@ function M.plan(action, project, opts)
 
   if action == "flash" then
     for _, item in ipairs(resolved_layout) do
-      local program, program_err = command(driver, "program_command", tools.program, {
-        probe = probe,
-        artifact = item.artifact,
-        address = item.address,
-      }, action)
+      local program, program_err =
+        command(driver, "program_command", tool_paths.program, {
+          probe = probe,
+          artifact = item.artifact,
+          address = item.address,
+        }, action)
       if not program then
         return nil, program_err
       end
@@ -257,21 +264,21 @@ function M.plan(action, project, opts)
       })
     end
     local reset, reset_err =
-      command(driver, "reset_command", tools.program, probe, action)
+      command(driver, "reset_command", tool_paths.program, probe, action)
     if not reset then
       return nil, reset_err
     end
     append(commands, steps, reset, { phase = "reset", image_id = nil })
   elseif action == "erase" then
     local erase, erase_err =
-      command(driver, "erase_command", tools.program, probe, action)
+      command(driver, "erase_command", tool_paths.program, probe, action)
     if not erase then
       return nil, erase_err
     end
     append(commands, steps, erase, { phase = "erase", image_id = nil })
   else
     local reset, reset_err =
-      command(driver, "reset_command", tools.program, probe, action)
+      command(driver, "reset_command", tool_paths.program, probe, action)
     if not reset then
       return nil, reset_err
     end
@@ -286,19 +293,48 @@ function M.plan(action, project, opts)
     or vim.tbl_map(function(image)
       return image.id
     end, resolved.images)
+  local requested_locks = {}
+  if action == "flash" then
+    requested_locks[#requested_locks + 1] = context.artifact_lock(resolved.project)
+  end
+  requested_locks[#requested_locks + 1] = {
+    kind = "probe",
+    id = locks.probe_id(probe.serial),
+  }
+  local elf_commands = {}
+  if action == "flash" and driver.artifact_kind == "elf" then
+    local objdump_path = tool_resolver.objdump(opts)
+    if not objdump_path then
+      return nil,
+        flash_error(
+          "flash-tool-unavailable",
+          "required ELF inspection tool not found: arm-none-eabi-objdump",
+          action
+        )
+    end
+    for _, item in ipairs(resolved_layout) do
+      elf_commands[#elf_commands + 1] = model.command({
+        argv = { objdump_path, "-h", item.artifact.path },
+        cwd = resolved.project.root,
+        image_id = item.image_id,
+        lifecycle = "short",
+        timeout_ms = 10000,
+      })
+    end
+  end
   return model.plan({
     id = action .. "-" .. next_plan_id,
     kind = action,
     project_id = resolved.project.id,
     images = image_ids,
     commands = commands,
-    locks = { { kind = "probe", id = driver.id .. ":" .. probe.serial } },
+    locks = requested_locks,
     reset_policy = action == "flash" and "once-after-verify"
       or action == "reset" and "once"
       or "none",
     metadata = {
       backend = driver.id,
-      tools = vim.deepcopy(tools),
+      tools = vim.deepcopy(tool_paths),
       probe = vim.deepcopy(probe),
       target = vim.deepcopy(target),
       project = vim.deepcopy(resolved.project),
@@ -306,6 +342,7 @@ function M.plan(action, project, opts)
         or nil,
       build_id = build_id,
       layout = vim.deepcopy(resolved_layout),
+      elf_commands = elf_commands,
       steps = steps,
       confirmed = opts.confirmed == true,
       preview = opts.preview == true,
@@ -438,6 +475,12 @@ function M.validate(plan)
   if type(plan.metadata.layout) ~= "table" then
     error("plan.metadata.layout: expected table")
   end
+  if type(plan.metadata.elf_commands) ~= "table" then
+    error("plan.metadata.elf_commands: expected table")
+  end
+  for index, value in ipairs(plan.metadata.elf_commands) do
+    plan.metadata.elf_commands[index] = model.command(value)
+  end
   plan.metadata.project = model.project(plan.metadata.project)
   plan.metadata.probe = model.probe(plan.metadata.probe)
   if plan.metadata.configuration then
@@ -445,7 +488,62 @@ function M.validate(plan)
   end
 end
 
-function M.preflight(plan)
+local function expected_elf_commands(plan, driver)
+  if plan.kind ~= "flash" or driver.artifact_kind ~= "elf" then
+    return {}
+  end
+  local executable = plan.metadata.elf_commands[1]
+    and plan.metadata.elf_commands[1].argv[1]
+  local commands = {}
+  for _, item in ipairs(plan.metadata.layout) do
+    commands[#commands + 1] = model.command({
+      argv = { executable, "-h", item.artifact.path },
+      cwd = plan.metadata.project.root,
+      image_id = item.image_id,
+      lifecycle = "short",
+      timeout_ms = 10000,
+    })
+  end
+  return commands
+end
+
+function M.inspect_elf_command(command, item, cfg)
+  if vim.fn.executable(command.argv[1]) ~= 1 then
+    return nil,
+      flash_error(
+        "flash-tool-unavailable",
+        "required ELF inspection tool not found: " .. command.argv[1],
+        "flash",
+        item.image_id
+      )
+  end
+  local result = vim
+    .system(command.argv, {
+      cwd = command.cwd,
+      env = vim.tbl_extend("force", {}, cfg.env or {}, tool_resolver.env(cfg)),
+      text = true,
+    })
+    :wait(command.timeout_ms)
+  local output = (result.stdout or "") .. (result.stderr or "")
+  if not process.succeeded(result) then
+    return nil,
+      flash_error(
+        "flash-elf-inspection-failed",
+        "could not inspect ELF load sections: " .. item.artifact.path,
+        "flash",
+        item.image_id
+      )
+  end
+  local sections, sections_err = objdump.parse_sections(output)
+  if not sections then
+    sections_err.operation = "flash"
+    sections_err.image_id = item.image_id
+    return nil, sections_err
+  end
+  return sections
+end
+
+function M.preflight(plan, cfg)
   if
     plan.kind == "erase" and (plan.metadata.preview or not plan.metadata.confirmed)
   then
@@ -490,11 +588,15 @@ function M.preflight(plan)
         plan.kind
       )
   end
-  if
-    #plan.locks ~= 1
-    or plan.locks[1].kind ~= "probe"
-    or plan.locks[1].id ~= plan.metadata.backend .. ":" .. plan.metadata.probe.serial
-  then
+  local expected_locks = {}
+  if plan.kind == "flash" then
+    expected_locks[#expected_locks + 1] = context.artifact_lock(plan.metadata.project)
+  end
+  expected_locks[#expected_locks + 1] = {
+    kind = "probe",
+    id = locks.probe_id(plan.metadata.probe.serial),
+  }
+  if not vim.deep_equal(plan.locks, expected_locks) then
     return nil,
       flash_error(
         "flash-plan-tampered",
@@ -504,10 +606,12 @@ function M.preflight(plan)
   end
 
   local ok, rebuilt = pcall(expected_commands, plan, driver)
+  local expected_inspections = expected_elf_commands(plan, driver)
   if
     not ok
     or not vim.deep_equal(rebuilt, plan.commands)
     or not vim.deep_equal(expected_steps(plan), plan.metadata.steps)
+    or not vim.deep_equal(expected_inspections, plan.metadata.elf_commands)
   then
     return nil,
       flash_error(
@@ -533,6 +637,17 @@ function M.preflight(plan)
           plan.kind
         )
     end
+    local sections = {}
+    for index, item in ipairs(plan.metadata.layout) do
+      local command_spec = plan.metadata.elf_commands[index]
+      if command_spec then
+        local parsed, parse_err = M.inspect_elf_command(command_spec, item, cfg)
+        if not parsed then
+          return nil, parse_err
+        end
+        sections[item.image_id] = parsed
+      end
+    end
     local checked, checked_err = layout.resolve(
       {
         project = plan.metadata.project,
@@ -543,18 +658,27 @@ function M.preflight(plan)
       vim.tbl_map(function(item)
         return item.artifact
       end, plan.metadata.layout),
-      driver
+      driver,
+      { sections = sections }
     )
     if not checked then
       return nil, checked_err
     end
-    if not vim.deep_equal(checked, plan.metadata.layout) then
-      return nil,
-        flash_error(
-          "flash-layout-changed",
-          "flash artifacts or memory layout changed after planning",
-          plan.kind
-        )
+    for index, item in ipairs(checked) do
+      local planned = plan.metadata.layout[index]
+      if
+        not planned
+        or item.image_id ~= planned.image_id
+        or not vim.deep_equal(item.artifact, planned.artifact)
+        or not vim.deep_equal(item.region, planned.region)
+      then
+        return nil,
+          flash_error(
+            "flash-layout-changed",
+            "flash artifacts or memory layout changed after planning",
+            plan.kind
+          )
+      end
     end
   end
   return true
@@ -629,7 +753,7 @@ function M.after_command(plan, command_result, command_index)
 end
 
 function M.complete(plan, process_result)
-  if process_result.code ~= 0 then
+  if not process.succeeded(process_result) then
     return failure(plan, command_error(plan, process_result), process_result)
   end
   local result_artifacts = {}
@@ -715,22 +839,22 @@ function M.current(action, opts, callback)
 
   local active
   local stage = "pending"
-  local cancelled = false
+  local cancellation_accepted = false
   local finished = false
   local composite = {}
 
   local function finish(result)
-    if finished or cancelled then
+    if finished then
       return
     end
     finished = true
-    stage = "completed"
+    stage = cancellation_accepted and "cancelled" or "completed"
     active = nil
     callback(result)
   end
 
   local function run_hardware(artifacts, build_id)
-    if cancelled then
+    if finished or cancellation_accepted then
       return
     end
     local plan_opts = vim.deepcopy(opts)
@@ -746,7 +870,7 @@ function M.current(action, opts, callback)
     end
     stage = "hardware"
     local child = require("nvim-stm32.operation").execute(plan, opts, hooks(), finish)
-    if stage == "hardware" and not finished and not cancelled then
+    if stage == "hardware" and not finished and not cancellation_accepted then
       active = child
     end
   end
@@ -761,7 +885,8 @@ function M.current(action, opts, callback)
     local child = require("nvim-stm32.operations.build").run(
       build_opts,
       function(result, err)
-        if cancelled then
+        if cancellation_accepted then
+          finish(result or immediate_failure("build", err))
           return
         end
         if not result or not result.ok then
@@ -769,10 +894,14 @@ function M.current(action, opts, callback)
           return
         end
         local build_id = result.metadata and result.metadata.operation_id
-        run_hardware(result.artifacts, build_id)
+        active = nil
+        stage = "between-stages"
+        vim.schedule(function()
+          run_hardware(result.artifacts, build_id)
+        end)
       end
     )
-    if stage == "build" and not finished and not cancelled then
+    if stage == "build" and not finished and not cancellation_accepted then
       active = child
     end
   else
@@ -780,24 +909,25 @@ function M.current(action, opts, callback)
   end
 
   function composite.state()
-    if cancelled then
-      return "cancelled"
-    end
     if finished then
-      return "completed"
+      return stage
+    end
+    if cancellation_accepted then
+      return "cancelling"
     end
     return active and active.state and active.state() or stage
   end
 
   function composite.cancel(reason)
-    if cancelled or finished then
+    if cancellation_accepted or finished or not active or not active.cancel then
       return false
     end
-    cancelled = true
-    stage = "cancelled"
-    if active and active.cancel then
-      active.cancel(reason)
+    local accepted = active.cancel(reason)
+    if not accepted then
+      return false
     end
+    cancellation_accepted = true
+    stage = "cancelled"
     return true
   end
 

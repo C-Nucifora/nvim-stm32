@@ -1,5 +1,6 @@
 local devices = require("nvim-stm32.monitor.devices")
 local model = require("nvim-stm32.model")
+local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
 local uart = require("nvim-stm32.drivers.uart")
 
@@ -200,7 +201,7 @@ function M.complete(plan, process_result)
       )
     )
   end
-  if process_result.code ~= 0 then
+  if not process.succeeded(process_result) then
     local setup = process_result.command_index == 1
     return result(
       plan,

@@ -28,6 +28,10 @@ local function modified_ns(path)
 end
 
 local function project(root, address)
+  local objdump = root .. "/tools/arm-none-eabi-objdump"
+  if not vim.uv.fs_lstat(objdump) then
+    link(fixtures .. "/fake_objdump.sh", objdump)
+  end
   write(
     root .. "/CMakePresets.json",
     vim.json.encode({
@@ -89,6 +93,7 @@ local function artifact(root, kind, build_id)
 end
 
 local function run_flash(action, project_value, opts, run_opts)
+  opts.toolchain_path = opts.toolchain_path or project_value.root .. "/tools"
   local plan, plan_err = flash.plan(action, project_value, opts)
   assert.is_nil(plan_err, vim.inspect(plan_err))
   assert.is_not_nil(plan)
@@ -631,6 +636,13 @@ describe("nvim-stm32 F429 software acceptance entry point", function()
       '  kill -TERM "$PPID"',
       "fi",
     })
+    executable(root .. "/tests/integration/normal-neovim-rpc.sh", {
+      "#!/bin/sh",
+      "set -eu",
+      'if [ -n "${NVIM_STM32_TEST_RPC_MARKER:-}" ]; then',
+      '  printf "%s\\n" called > "$NVIM_STM32_TEST_RPC_MARKER"',
+      "fi",
+    })
     executable(root .. "/bin/stylua", { "#!/bin/sh", "exit 0" })
     executable(root .. "/scripts/validate-corpus.sh", {
       "#!/bin/sh",
@@ -701,6 +713,22 @@ describe("nvim-stm32 F429 software acceptance entry point", function()
     assert.equals(1, result.code)
     assert.matches("controlled discovery failure", result.stdout, 1, true)
     assert.matches("F429 discovery gate failed with status 7", result.stderr, 1, true)
+  end)
+
+  it("runs the normal Neovim RPC gate before accepting the corpus", function()
+    local marker = root .. "/rpc-called"
+    local result = vim
+      .system({ wrapper, corpus }, {
+        text = true,
+        env = {
+          PATH = fixture_path,
+          NVIM_STM32_TEST_RPC_MARKER = marker,
+        },
+      })
+      :wait()
+
+    assert.equals(0, result.code, result.stderr)
+    assert.equals("called", vim.fn.readfile(marker)[1])
   end)
 
   it("prints discovery diagnostics before its wrong-summary failure", function()

@@ -26,7 +26,11 @@ function M.lines(plan)
     lines[#lines + 1] = ""
     lines[#lines + 1] = "Image: " .. item.image_id
     lines[#lines + 1] = "Artifact: " .. item.artifact.path
-    lines[#lines + 1] = string.format("Address: 0x%08X", item.address)
+    if item.embedded_address then
+      lines[#lines + 1] = "Address: embedded in ELF"
+    else
+      lines[#lines + 1] = string.format("Address: 0x%08X", item.address)
+    end
   end
   for index, command in ipairs(plan.commands) do
     lines[#lines + 1] = ""

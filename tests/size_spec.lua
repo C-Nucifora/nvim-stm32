@@ -22,6 +22,15 @@ describe("nvim-stm32 GNU size parsing", function()
     assert.same({ text = 19644, data = 104, bss = 3800 }, summary)
   end)
 
+  it("accepts a Berkeley filename containing spaces", function()
+    local summary = assert(size.parse([[
+      text data bss dec hex filename
+      19644 104 3800 23548 5bfc /tmp/build output/app image.elf
+    ]]))
+
+    assert.same({ text = 19644, data = 104, bss = 3800 }, summary)
+  end)
+
   it("returns a structured error for malformed output", function()
     local summary, err = size.parse("arm-none-eabi-size: file format not recognized")
 

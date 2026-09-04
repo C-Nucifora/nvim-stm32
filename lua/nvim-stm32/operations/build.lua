@@ -2,6 +2,7 @@ local artifacts = require("nvim-stm32.discover.artifacts")
 local file_api = require("nvim-stm32.build.file_api")
 local model = require("nvim-stm32.model")
 local presets = require("nvim-stm32.build.presets")
+local process = require("nvim-stm32.process")
 local session = require("nvim-stm32.session")
 local context = require("nvim-stm32.operations.context")
 
@@ -284,7 +285,7 @@ function M.plan(project, opts)
       image_targets(project, selected),
       mode
     ),
-    locks = {},
+    locks = { context.artifact_lock(project) },
     reset_policy = "none",
     metadata = metadata,
   })
@@ -325,12 +326,12 @@ function M.preflight(plan)
 end
 
 function M.complete(plan, process_result)
-  if process_result.code ~= 0 then
+  if not process.succeeded(process_result) then
     return failure(
       plan,
       operation_error(
         "process-failed",
-        "build command failed with exit code " .. tostring(process_result.code),
+        "build command did not complete successfully",
         plan,
         process_result
       ),

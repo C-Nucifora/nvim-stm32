@@ -155,6 +155,27 @@ describe("nvim-stm32.process.run", function()
     }, done.commands)
   end)
 
+  it("stops a pipeline when a zero-exit child was terminated by a signal", function()
+    local done
+    process.system = function(cmd, opts, callback)
+      calls[#calls + 1] = { cmd = cmd, opts = opts }
+      callback({ code = 0, signal = 15 })
+      return { pid = 39, kill = function() end }
+    end
+
+    process.run({ { "first" }, { "must-not-run" } }, {}, function(result)
+      done = result
+    end)
+
+    assert.is_true(vim.wait(100, function()
+      return done ~= nil
+    end))
+    assert.equals(1, #calls)
+    assert.equals(0, done.code)
+    assert.equals(15, done.signal)
+    assert.same({ "first" }, done.command)
+  end)
+
   it("stops before the next child when after_command rejects continuation", function()
     local done
     local gate_error = {

@@ -221,6 +221,30 @@ describe("nvim-stm32 build lifecycle", function()
     assert.same({ selected }, session.get(root).artifacts)
   end)
 
+  it("keeps prior artifacts when clean exits zero after SIGTERM", function()
+    local selected = artifact(root, "application", "Debug", "elf")
+    session.select(root, { artifacts = { selected } })
+    local planned = assert(build.plan(project(root, "cmake_presets"), {
+      configuration = "Debug",
+      mode = "clean",
+    }))
+    local result
+    vim.fn.executable = function()
+      return 1
+    end
+    process.run = function(_, _, callback)
+      callback({ code = 0, signal = 15, output = "terminated" })
+      return { id = 3 }
+    end
+
+    operation.run(planned, {}, function(value)
+      result = value
+    end)
+
+    assert.is_false(result.ok)
+    assert.same({ selected }, session.get(root).artifacts)
+  end)
+
   it("registers clean and rebuild commands and plan completion", function()
     pcall(vim.api.nvim_del_user_command, "STM32Clean")
     pcall(vim.api.nvim_del_user_command, "STM32Rebuild")

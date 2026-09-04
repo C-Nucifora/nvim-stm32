@@ -5,6 +5,16 @@ local M = {}
 local held = {}
 local next_acquisition_id = 0
 
+function M.probe_id(serial)
+  vim.validate("serial", serial, function(value)
+    return type(value) == "string" and value:match("%S") ~= nil
+  end, "a non-empty string")
+  local normalized = serial:match("^%s*(.-)%s*$")
+  local hexadecimal = normalized:match("^0[xX]([%da-fA-F]+)$")
+    or normalized:match("^([%da-fA-F]+)$")
+  return hexadecimal and hexadecimal:upper() or normalized
+end
+
 local function same_lock(a, b)
   return a.kind == b.kind and a.id == b.id
 end

@@ -96,6 +96,7 @@ local function add_artifact(
     configuration = config.name,
     build_target = build_target,
     modified_ns = modified_ns(stat_or_err),
+    size = stat_or_err.size,
     build_id = build_id,
     provenance = { source = source },
   })
