@@ -30,4 +30,18 @@ function M.get_config()
   return M.config or config.resolve()
 end
 
+--- Return the in-memory session for a project root or resolved project.
+---@param root table|string
+---@return table
+function M.get_session(root)
+  return require("nvim-stm32.session").get(root)
+end
+
+--- Resolve the STM32 project containing a directory.
+---@param dir? string
+---@return table|nil, table|nil
+function M.resolve_project(dir)
+  return require("nvim-stm32.discover.project").resolve(dir)
+end
+
 return M
