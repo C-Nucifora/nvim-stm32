@@ -1,0 +1,10 @@
+describe("test harness", function()
+  it("puts the plugin on the runtimepath", function()
+    local found = vim.api.nvim_get_runtime_file("lua/nvim-stm32/", true)
+    assert.is_true(#found > 0)
+  end)
+
+  it("runs on a Neovim the plugin supports", function()
+    assert.equals(1, vim.fn.has("nvim-0.11"))
+  end)
+end)

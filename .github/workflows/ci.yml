@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Cancel superseded runs of the same branch or PR instead of queueing a
+# duplicate job matrix for every push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stylua:
+    name: Lua Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: JohnnyMorganz/stylua-action@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check lua/ tests/
+
+  test:
+    name: Tests (Neovim ${{ matrix.neovim }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim: [stable, nightly]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      - name: Check out plenary.nvim
+        uses: actions/checkout@v6
+        with:
+          repository: nvim-lua/plenary.nvim
+          path: deps/plenary.nvim
+
+      - name: Run tests
+        env:
+          PLENARY_PATH: ${{ github.workspace }}/deps/plenary.nvim
+        run: scripts/test.sh
