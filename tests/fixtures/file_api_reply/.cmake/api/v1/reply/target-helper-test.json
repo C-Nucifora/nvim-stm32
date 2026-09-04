@@ -3,7 +3,7 @@
   "id": "helper::@6890427a1f51a3e7e1df",
   "type": "UTILITY",
   "paths": {
-    "source": "helper",
-    "build": "helper"
+    "source": "firmware/cm4/helper",
+    "build": "firmware/cm4/helper"
   }
 }

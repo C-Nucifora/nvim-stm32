@@ -69,13 +69,22 @@ local function selected_reply(plan, reply)
       target_names[image.build_target] = true
     end
   end
-  if vim.tbl_isempty(target_names) then
-    return reply
+  local targets = reply.targets or {}
+  if type(reply.configurations) == "table" then
+    for _, configuration in ipairs(reply.configurations) do
+      if configuration.name == plan.metadata.configuration.name then
+        targets = configuration.targets or {}
+        break
+      end
+    end
+    if #reply.configurations == 1 and targets == reply.targets then
+      targets = reply.configurations[1].targets or {}
+    end
   end
   return {
     targets = vim.tbl_filter(function(target)
-      return target_names[target.name]
-    end, reply.targets or {}),
+      return vim.tbl_isempty(target_names) or target_names[target.name]
+    end, targets),
   }
 end
 

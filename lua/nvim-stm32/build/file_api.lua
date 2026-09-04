@@ -116,7 +116,11 @@ local function valid_codemodel(codemodel)
     return false
   end
   for _, configuration in ipairs(codemodel.configurations) do
-    if type(configuration) ~= "table" or not is_dense_array(configuration.targets) then
+    if
+      type(configuration) ~= "table"
+      or type(configuration.name) ~= "string"
+      or not is_dense_array(configuration.targets)
+    then
       return false
     end
     local directories = configuration.directories
@@ -235,7 +239,13 @@ local function target_path(reply_dir, target, codemodel_path)
   return path
 end
 
-local function target_record(reply_dir, codemodel_path, directories, target_ref)
+local function target_record(
+  reply_dir,
+  codemodel_path,
+  codemodel_paths,
+  configuration_name,
+  target_ref
+)
   local path, path_err = target_path(reply_dir, target_ref, codemodel_path)
   if not path then
     return nil, path_err
@@ -251,19 +261,6 @@ local function target_record(reply_dir, codemodel_path, directories, target_ref)
     return false
   end
 
-  local directory = {}
-  if target_ref.directoryIndex ~= nil then
-    if
-      type(target_ref.directoryIndex) ~= "number"
-      or target_ref.directoryIndex < 0
-      or target_ref.directoryIndex % 1 ~= 0
-      or type(directories[target_ref.directoryIndex + 1]) ~= "table"
-    then
-      return nil,
-        file_error("cmake-file-api-target", path, "has an invalid directory index")
-    end
-    directory = directories[target_ref.directoryIndex + 1] or {}
-  end
   if target.paths ~= nil and type(target.paths) ~= "table" then
     return nil, file_error("cmake-file-api-target", path, "has invalid paths")
   end
@@ -274,14 +271,8 @@ local function target_record(reply_dir, codemodel_path, directories, target_ref)
     return nil, file_error("cmake-file-api-target", path, "has invalid linker metadata")
   end
   local paths = target.paths or {}
-  local source_dir = directory.source
-  local build_dir = directory.build
-  if paths.source ~= nil then
-    source_dir = resolve_path(directory.source, paths.source)
-  end
-  if paths.build ~= nil then
-    build_dir = resolve_path(directory.build, paths.build)
-  end
+  local source_dir = resolve_path(codemodel_paths.source, paths.source)
+  local build_dir = resolve_path(codemodel_paths.build, paths.build)
   local name = target.name or target_ref.name
   if
     type(name) ~= "string"
@@ -305,16 +296,13 @@ local function target_record(reply_dir, codemodel_path, directories, target_ref)
     then
       return nil, file_error("cmake-file-api-target", path, "has an invalid artifact")
     end
-    if is_absolute(artifact.path) then
-      artifacts[#artifacts + 1] = vim.fs.normalize(artifact.path)
-    else
-      artifacts[#artifacts + 1] = vim.fs.normalize(build_dir .. "/" .. artifact.path)
-    end
+    artifacts[#artifacts + 1] = resolve_path(codemodel_paths.build, artifact.path)
   end
 
   local record = {
     name = name,
     type = target.type,
+    configuration = configuration_name,
     source_dir = vim.fs.normalize(source_dir),
     build_dir = vim.fs.normalize(build_dir),
     artifacts = artifacts,
@@ -421,7 +409,7 @@ function M.reply(binary_dir)
     return nil, codemodel_path
   end
 
-  local reply = { targets = {} }
+  local reply = { targets = {}, configurations = {} }
   for _, configuration in ipairs(codemodel.configurations) do
     if type(configuration) ~= "table" or type(configuration.targets) ~= "table" then
       return nil,
@@ -440,22 +428,8 @@ function M.reply(binary_dir)
           "has invalid directories"
         )
     end
-    local resolved_directories = {}
-    for index, directory in ipairs(directories) do
-      local source_dir =
-        resolve_path(codemodel.paths and codemodel.paths.source, directory.source)
-      local build_dir =
-        resolve_path(codemodel.paths and codemodel.paths.build, directory.build)
-      if not source_dir or not build_dir then
-        return nil,
-          file_error(
-            "cmake-file-api-codemodel",
-            codemodel_path,
-            "has a directory outside its codemodel paths"
-          )
-      end
-      resolved_directories[index] = { source = source_dir, build = build_dir }
-    end
+    local configuration_reply = { name = configuration.name, targets = {} }
+    reply.configurations[#reply.configurations + 1] = configuration_reply
     for _, target_ref in ipairs(configuration.targets) do
       if type(target_ref) ~= "table" then
         return nil,
@@ -465,13 +439,19 @@ function M.reply(binary_dir)
             "has an invalid target reference"
           )
       end
-      local target, target_err =
-        target_record(reply_dir, codemodel_path, resolved_directories, target_ref)
+      local target, target_err = target_record(
+        reply_dir,
+        codemodel_path,
+        codemodel.paths,
+        configuration.name,
+        target_ref
+      )
       if target_err then
         return nil, target_err
       end
       if target then
         reply.targets[#reply.targets + 1] = target
+        configuration_reply.targets[#configuration_reply.targets + 1] = target
       end
     end
   end

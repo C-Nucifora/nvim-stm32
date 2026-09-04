@@ -23,6 +23,7 @@ local function valid_codemodel(target_file)
     paths = { source = "/source", build = "/build" },
     configurations = {
       {
+        name = "Debug",
         targets = { { name = "app", jsonFile = target_file } },
       },
     },
@@ -75,6 +76,7 @@ describe("nvim-stm32 CMake File API", function()
     assert.same({
       name = "app",
       type = "EXECUTABLE",
+      configuration = "Debug",
       source_dir = "/placeholder/source/firmware/cm4/app",
       build_dir = "/placeholder/build/firmware/cm4/app",
       artifacts = { "/placeholder/build/firmware/cm4/app/app.elf" },
@@ -196,6 +198,7 @@ describe("nvim-stm32 CMake File API", function()
       paths = { source = "/source", build = "/build" },
       configurations = {
         {
+          name = "Debug",
           targets = { { name = "app", jsonFile = "target-app-test.json" } },
         },
       },

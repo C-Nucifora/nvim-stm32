@@ -62,6 +62,7 @@ local function write_reply(root, target_name)
     paths = { source = root, build = binary },
     configurations = {
       {
+        name = "Debug",
         targets = { { name = target_name, jsonFile = "target-test.json" } },
       },
     },
@@ -71,6 +72,58 @@ local function write_reply(root, target_name)
     type = "EXECUTABLE",
     paths = { source = root, build = binary },
     artifacts = { { path = target_name .. ".elf" } },
+  })
+end
+
+local function write_multi_configuration_reply(root, target_name)
+  local binary = root .. "/build/Debug"
+  local replies = binary .. "/.cmake/api/v1/reply"
+  vim.fn.mkdir(replies, "p")
+  vim.fn.mkdir(binary .. "/Debug", "p")
+  vim.fn.mkdir(binary .. "/Release", "p")
+  vim.fn.writefile({ "debug elf" }, binary .. "/Debug/" .. target_name .. ".elf")
+  vim.fn.writefile({ "release elf" }, binary .. "/Release/" .. target_name .. ".elf")
+  write_json(replies .. "/index-test.json", {
+    objects = {
+      {
+        kind = "codemodel",
+        version = { major = 2 },
+        jsonFile = "codemodel-test.json",
+      },
+    },
+  })
+  write_json(replies .. "/codemodel-test.json", {
+    kind = "codemodel",
+    version = { major = 2 },
+    paths = { source = root, build = binary },
+    configurations = {
+      {
+        name = "Debug",
+        directories = { { source = ".", build = "." } },
+        targets = {
+          { name = target_name, directoryIndex = 0, jsonFile = "target-debug.json" },
+        },
+      },
+      {
+        name = "Release",
+        directories = { { source = ".", build = "." } },
+        targets = {
+          { name = target_name, directoryIndex = 0, jsonFile = "target-release.json" },
+        },
+      },
+    },
+  })
+  write_json(replies .. "/target-debug.json", {
+    name = target_name,
+    type = "EXECUTABLE",
+    paths = { source = ".", build = "." },
+    artifacts = { { path = "Debug/" .. target_name .. ".elf" } },
+  })
+  write_json(replies .. "/target-release.json", {
+    name = target_name,
+    type = "EXECUTABLE",
+    paths = { source = ".", build = "." },
+    artifacts = { { path = "Release/" .. target_name .. ".elf" } },
   })
 end
 
@@ -300,6 +353,32 @@ describe("nvim-stm32 operation execution", function()
     assert.equals(root .. "/build/Debug/app.elf", result.elf)
     assert.same(result.artifacts, session.get(root).artifacts)
     assert.same(snapshot, planned)
+  end)
+
+  it("uses File API artifacts only from the planned configuration", function()
+    local planned = assert(build.plan(project(root), { configuration = "Debug" }))
+    local result
+
+    process.run = function(commands, _, callback)
+      write_multi_configuration_reply(root, "app")
+      callback({
+        code = 0,
+        signal = 0,
+        output = "built",
+        command = commands[2].argv,
+        started_ns = 10,
+        ended_ns = 20,
+      })
+      return { id = 10 }
+    end
+
+    operation.run(planned, {}, function(value)
+      result = value
+    end)
+
+    assert.is_true(result.ok, vim.inspect(result))
+    assert.equals(1, #result.artifacts)
+    assert.equals(root .. "/build/Debug/Debug/app.elf", result.elf)
   end)
 
   it("deep-copies a plan before handing commands to the process manager", function()

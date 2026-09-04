@@ -86,7 +86,7 @@ describe("nvim-stm32.health.cmake_project_status", function()
         kind = "codemodel",
         version = { major = 2 },
         paths = { source = root, build = binary },
-        configurations = { { targets = {} } },
+        configurations = { { name = "Debug", targets = {} } },
       }),
     }, replies .. "/codemodel-test.json")
 
