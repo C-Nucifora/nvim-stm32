@@ -106,31 +106,18 @@ describe("nvim-stm32 artifact discovery", function()
 
   it("finds uppercase sibling artifact extensions", function()
     local uppercase_project = project(root, { image("application", "caps") })
-    write(root .. "/build/Debug/caps.ELF")
+    write(root .. "/build/Debug/caps.elf")
     write(root .. "/build/Debug/caps.HEX")
     write(root .. "/build/Debug/caps.BIN")
     write(root .. "/build/Debug/caps.MAP")
-    local original_stat = vim.uv.fs_stat
-    vim.uv.fs_stat = function(path, ...)
-      if
-        path:match("caps%.hex$")
-        or path:match("caps%.bin$")
-        or path:match("caps%.map$")
-      then
-        return nil
-      end
-      return original_stat(path, ...)
-    end
-    local ok, found_or_err = pcall(
-      artifacts.from_cmake,
-      uppercase_project,
-      config,
-      reply(root, { "caps" }),
-      "op-uppercase"
+    local found = assert(
+      artifacts.from_cmake(
+        uppercase_project,
+        config,
+        reply(root, { "caps" }),
+        "op-uppercase"
+      )
     )
-    vim.uv.fs_stat = original_stat
-    assert.is_true(ok, found_or_err)
-    local found = found_or_err
 
     assert.equals(4, #found)
     local kinds = vim.tbl_map(function(artifact)
