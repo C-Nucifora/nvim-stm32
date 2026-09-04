@@ -1,0 +1,9 @@
+{
+  "objects": [
+    {
+      "kind": "codemodel",
+      "version": { "major": 2, "minor": 7 },
+      "jsonFile": "codemodel-v2-unusable.json"
+    }
+  ]
+}

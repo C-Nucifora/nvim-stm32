@@ -105,6 +105,8 @@ describe("nvim-stm32.detect.target", function()
     assert.equals("target/stm32f4x.cfg", t.openocd_cfg)
     assert.equals("exact", t.confidence)
     assert.is_nil(t.elf)
+    assert.equals("application", t.image_id)
+    assert.equals(fixture("nucleo_cmake"), t.project.root)
   end)
 
   it("still returns a buildable Target when the chip is unknown", function()

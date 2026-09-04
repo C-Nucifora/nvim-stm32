@@ -2,6 +2,7 @@ local build = require("nvim-stm32.backend.build")
 local float = require("nvim-stm32.ui.float")
 local plugin = require("nvim-stm32")
 local process = require("nvim-stm32.process")
+local session = require("nvim-stm32.session")
 
 local function fixture(rel)
   local here =
@@ -16,7 +17,7 @@ describe("nvim-stm32 build command resolution", function()
     }))
     assert.same({
       { "cmake", "--preset", "Debug" },
-      { "cmake", "--build", "build/Debug" },
+      { "cmake", "--build", "--preset", "Debug" },
     }, commands)
   end)
 
@@ -37,6 +38,26 @@ describe("nvim-stm32 build command resolution", function()
     assert.is_nil(commands)
     assert.matches("unknown build backend", err, 1, true)
   end)
+
+  it(
+    "returns a string error for an explicit preset with malformed preset JSON",
+    function()
+      local root = vim.fn.tempname()
+      vim.fn.mkdir(root, "p")
+      vim.fn.writefile({ "not json" }, root .. "/CMakePresets.json")
+
+      local commands, err = build.commands(
+        { root = root, build_backend = "cmake_presets" },
+        {
+          preset = "Debug",
+        }
+      )
+      assert.is_nil(commands)
+      assert.equals("string", type(err))
+      assert.matches("invalid JSON", err, 1, true)
+      vim.fn.delete(root, "rf")
+    end
+  )
 end)
 
 describe("nvim-stm32 ELF discovery", function()
@@ -48,6 +69,7 @@ describe("nvim-stm32 ELF discovery", function()
   end)
 
   after_each(function()
+    session.clear()
     vim.fn.delete(root, "rf")
   end)
 
@@ -91,9 +113,90 @@ describe("nvim-stm32 ELF discovery", function()
 
     local elf, err = build.find_elf({ root = root, build_backend = "make" }, {})
     assert.is_nil(elf)
-    assert.matches("multiple .elf", err, 1, true)
-    assert.matches("one.elf", err, 1, true)
-    assert.matches("two.elf", err, 1, true)
+    assert.matches("cannot map artifact", err, 1, true)
+  end)
+
+  it("uses selected-image artifacts when they are supplied", function()
+    vim.fn.writefile({ "app" }, root .. "/build/app.elf")
+    vim.fn.writefile({ "other" }, root .. "/build/other.elf")
+
+    assert.equals(
+      root .. "/build/app.elf",
+      (
+        build.find_elf(
+          { root = root, build_backend = "make", image_id = "application" },
+          {
+            artifacts = {
+              {
+                image_id = "application",
+                kind = "elf",
+                path = root .. "/build/app.elf",
+              },
+              {
+                image_id = "other",
+                kind = "elf",
+                path = root .. "/build/other.elf",
+              },
+            },
+          }
+        )
+      )
+    )
+  end)
+
+  it("uses the session artifact view for compatibility lookup", function()
+    local elf = root .. "/artifacts/app.elf"
+    vim.fn.mkdir(root .. "/artifacts", "p")
+    vim.fn.writefile({ "app" }, elf)
+    session.record(root, {
+      artifacts = {
+        {
+          image_id = "application",
+          kind = "elf",
+          path = elf,
+          configuration = "Debug",
+          build_target = "app",
+          modified_ns = 1,
+        },
+      },
+    })
+
+    assert.equals(elf, build.find_elf({ root = root, build_backend = "make" }, {}))
+  end)
+
+  it("restricts the session artifact view to the selected configuration", function()
+    local debug_elf = root .. "/artifacts/Debug/app.elf"
+    local release_elf = root .. "/artifacts/Release/app.elf"
+    vim.fn.mkdir(vim.fs.dirname(debug_elf), "p")
+    vim.fn.mkdir(vim.fs.dirname(release_elf), "p")
+    vim.fn.writefile({ "debug" }, debug_elf)
+    vim.fn.writefile({ "release" }, release_elf)
+    session.select(root, { image_id = "application", configuration = "Debug" })
+    session.record(root, {
+      artifacts = {
+        {
+          image_id = "application",
+          kind = "elf",
+          path = debug_elf,
+          configuration = "Debug",
+          build_target = "app",
+          modified_ns = 1,
+        },
+        {
+          image_id = "application",
+          kind = "elf",
+          path = release_elf,
+          configuration = "Release",
+          build_target = "app",
+          modified_ns = 2,
+        },
+      },
+    })
+
+    assert.equals(
+      debug_elf,
+      build.find_elf({ root = root, build_backend = "make" }, {})
+    )
   end)
 end)
 
@@ -201,28 +304,71 @@ describe("nvim-stm32 build execution", function()
 end)
 
 describe("nvim-stm32 current build", function()
-  local original_run
-
-  before_each(function()
-    original_run = build.run
-  end)
+  local operations = require("nvim-stm32.operations.build")
 
   after_each(function()
-    build.run = original_run
     pcall(vim.cmd, "bwipeout!")
   end)
 
-  it("detects from the current buffer and accepts an explicit preset", function()
+  it("delegates current builds to the operation implementation", function()
+    local original_current = operations.current
     local captured
-    build.run = function(target, opts)
-      captured = { target = target, opts = opts }
+    operations.current = function(opts, callback)
+      captured = { opts = opts, callback = callback }
+      return { id = 17 }
     end
-    vim.cmd("edit " .. vim.fn.fnameescape(fixture("nucleo_cmake/Core/Src/main.c")))
+    local callback = function() end
 
-    build.current({ preset = "Release" })
+    local handle = build.current({ configuration = "Debug" }, callback)
 
-    assert.equals(fixture("nucleo_cmake"), captured.target.root)
-    assert.equals("Release", captured.opts.preset)
+    operations.current = original_current
+    assert.equals(17, handle.id)
+    assert.equals("Debug", captured.opts.configuration)
+    assert.equals(callback, captured.callback)
+  end)
+end)
+
+describe("nvim-stm32 preset error presentation", function()
+  local discovery = require("nvim-stm32.discover.project")
+  local original_resolve
+  local original_notify
+
+  before_each(function()
+    original_resolve = discovery.resolve
+    original_notify = vim.notify
+  end)
+
+  after_each(function()
+    discovery.resolve = original_resolve
+    vim.notify = original_notify
+  end)
+
+  it("notifies with a string when the preset picker cannot load presets", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({ "not json" }, root .. "/CMakePresets.json")
+    local notification
+    discovery.resolve = function()
+      return {
+        id = root,
+        root = root,
+        kind = "cmake_presets",
+        build = { adapter = "cmake_presets" },
+        images = {
+          { id = "application", name = "application", target = {} },
+        },
+      }
+    end
+    vim.notify = function(message, level)
+      assert.equals("string", type(message))
+      notification = { message = message, level = level }
+    end
+
+    local ok, err = pcall(build.current)
+    assert.is_true(ok, err)
+    assert.matches("invalid JSON", notification.message, 1, true)
+    assert.equals(vim.log.levels.ERROR, notification.level)
+    vim.fn.delete(root, "rf")
   end)
 end)
 

@@ -1,6 +1,7 @@
 local float = require("nvim-stm32.ui.float")
 local process = require("nvim-stm32.process")
 local tools = require("nvim-stm32.tools")
+local artifacts = require("nvim-stm32.discover.artifacts")
 
 local M = {}
 
@@ -32,34 +33,125 @@ function M.commands(target, opts)
 
   local commands = {}
   if backend.configure_cmd then
-    commands[#commands + 1] = backend.configure_cmd(target, opts)
+    local configure_command, configure_err = backend.configure_cmd(target, opts)
+    if not configure_command then
+      return nil, configure_err
+    end
+    commands[#commands + 1] = configure_command
   end
-  commands[#commands + 1] = backend.cmd(target, opts)
+  local build_command, build_err = backend.cmd(target, opts)
+  if not build_command then
+    return nil, build_err
+  end
+  commands[#commands + 1] = build_command
   return commands
 end
 
 function M.find_elf(target, opts)
   opts = opts or {}
-  local search_root = target.root .. "/build"
-  if target.build_backend == "cmake_presets" then
-    if not opts.preset then
-      return nil, "nvim-stm32: preset is required to find the built .elf"
+  local image_id = target.image_id or opts.image_id
+  local found
+
+  if not opts.artifacts and target.root then
+    local state = require("nvim-stm32.session").get(target.root)
+    if #state.artifacts > 0 then
+      image_id = image_id or state.image_id
+      local configuration = opts.configuration or opts.preset or state.configuration
+      if type(configuration) == "table" then
+        configuration = configuration.name
+      end
+      local compatible = vim.tbl_filter(function(artifact)
+        return (not image_id or artifact.image_id == image_id)
+          and (not configuration or artifact.configuration == configuration)
+          and artifact.kind == "elf"
+      end, state.artifacts)
+      opts = vim.tbl_extend("force", {}, opts, { artifacts = compatible })
+      if not image_id then
+        local ids = {}
+        for _, artifact in ipairs(compatible) do
+          ids[artifact.image_id] = true
+        end
+        local sole
+        for id in pairs(ids) do
+          if sole then
+            sole = nil
+            break
+          end
+          sole = id
+        end
+        image_id = sole
+      end
     end
-    search_root = search_root .. "/" .. opts.preset
   end
 
-  local files = vim.fs.find(function(name)
-    return name:sub(-4):lower() == ".elf"
-  end, { path = search_root, type = "file", limit = 2 })
-  table.sort(files)
+  if opts.artifacts then
+    if not image_id then
+      return nil, "nvim-stm32: image id is required to select a built .elf"
+    end
+    found = artifacts.for_image(opts.artifacts, image_id, "elf")
+  elseif opts.project and opts.configuration then
+    local all, artifact_err
+    if opts.reply then
+      all, artifact_err = artifacts.from_cmake(
+        opts.project,
+        opts.configuration,
+        opts.reply,
+        opts.build_id
+      )
+    else
+      all, artifact_err =
+        artifacts.from_tree(opts.project, opts.configuration, opts.build_id)
+    end
+    if not all then
+      return nil, artifacts.format_error(artifact_err)
+    end
+    if not image_id and #opts.project.images == 1 then
+      image_id = opts.project.images[1].id
+    end
+    if not image_id then
+      return nil, "nvim-stm32: image id is required to select a built .elf"
+    end
+    found = artifacts.for_image(all, image_id, "elf")
+  else
+    local search_root = target.root .. "/build"
+    if target.build_backend == "cmake_presets" then
+      if not opts.preset then
+        return nil, "nvim-stm32: preset is required to find the built .elf"
+      end
+      search_root = search_root .. "/" .. opts.preset
+    end
+    image_id = image_id or "legacy"
+    local all, artifact_err = artifacts.from_tree({
+      images = {
+        {
+          id = image_id,
+          build_target = target.build_target,
+        },
+      },
+    }, {
+      name = opts.preset or "default",
+      binary_dir = search_root,
+    }, opts.build_id)
+    if not all then
+      if artifact_err.code == "artifact-missing" then
+        return nil, "nvim-stm32: no .elf found under " .. search_root
+      end
+      return nil, artifacts.format_error(artifact_err)
+    end
+    found = artifacts.for_image(all, image_id, "elf")
+  end
 
-  if #files == 0 then
-    return nil, "nvim-stm32: no .elf found under " .. search_root
+  if #found == 0 then
+    return nil, "nvim-stm32: no .elf found for image " .. image_id
   end
-  if #files > 1 then
-    return nil, "nvim-stm32: multiple .elf files found: " .. table.concat(files, ", ")
+  if #found > 1 then
+    local paths = {}
+    for _, artifact in ipairs(found) do
+      paths[#paths + 1] = artifact.path
+    end
+    return nil, "nvim-stm32: multiple .elf files found: " .. table.concat(paths, ", ")
   end
-  return files[1]
+  return found[1].path
 end
 
 local function report_error(presenter, result, err)
@@ -114,39 +206,8 @@ function M.run(target, opts, callback)
   return presenter
 end
 
-function M.current(opts)
-  local target, detect_err = require("nvim-stm32.detect").target()
-  if not target then
-    vim.notify(detect_err, vim.log.levels.WARN)
-    return
-  end
-  if not target.build_backend then
-    vim.notify("nvim-stm32: project has no supported build file", vim.log.levels.WARN)
-    return
-  end
-
-  local config = resolved_config(opts)
-  if target.build_backend ~= "cmake_presets" or config.preset then
-    return M.run(target, config)
-  end
-
-  local names, preset_err = M.backends.cmake_presets.presets(target.root)
-  if not names then
-    vim.notify(preset_err, vim.log.levels.ERROR)
-    return
-  end
-  if #names == 0 then
-    vim.notify("nvim-stm32: no visible CMake presets found", vim.log.levels.WARN)
-    return
-  end
-
-  vim.ui.select(names, { prompt = "STM32 build preset" }, function(choice)
-    if not choice then
-      return
-    end
-    config.preset = choice
-    M.run(target, config)
-  end)
+function M.current(opts, callback)
+  return require("nvim-stm32.operations.build").current(opts, callback)
 end
 
 return M

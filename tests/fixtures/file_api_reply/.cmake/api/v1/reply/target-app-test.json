@@ -1,0 +1,20 @@
+{
+  "name": "app",
+  "id": "app::@6890427a1f51a3e7e1df",
+  "type": "EXECUTABLE",
+  "paths": {
+    "source": "firmware/cm4/app",
+    "build": "firmware/cm4/app"
+  },
+  "artifacts": [
+    { "path": "firmware/cm4/app/app.elf" }
+  ],
+  "link": {
+    "commandFragments": [
+      { "fragment": "arm-none-eabi-gcc", "role": "flags" },
+      { "fragment": "-Wl,-Tapp.ld", "role": "flags" },
+      { "fragment": "-o", "role": "flags" },
+      { "fragment": "app.elf", "role": "flags" }
+    ]
+  }
+}

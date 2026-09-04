@@ -39,6 +39,7 @@ function Presenter:append(chunk)
 end
 
 function Presenter:close()
+  self.programmatic_close = true
   if self.snacks then
     pcall(self.snacks.close, self.snacks)
     return
@@ -46,6 +47,24 @@ function Presenter:close()
   if self.win and vim.api.nvim_win_is_valid(self.win) then
     vim.api.nvim_win_close(self.win, true)
   end
+end
+
+local function watch_close(presenter, on_close)
+  if not on_close or not presenter.win then
+    return
+  end
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(presenter.win),
+    once = true,
+    callback = function()
+      if presenter.programmatic_close or presenter.close_called then
+        return
+      end
+      presenter.close_called = true
+      on_close()
+    end,
+  })
 end
 
 function Presenter:finish(ok)
@@ -78,7 +97,7 @@ local function native_window(buf, title, config)
   })
 end
 
-function M.open(target, config)
+function M.open(target, config, on_close)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].swapfile = false
@@ -109,11 +128,13 @@ function M.open(target, config)
       snack_window:show()
       presenter.snacks = snack_window
       presenter.win = snack_window.win
+      watch_close(presenter, on_close)
       return presenter
     end
   end
 
   presenter.win = native_window(buf, title, config)
+  watch_close(presenter, on_close)
   return presenter
 end
 

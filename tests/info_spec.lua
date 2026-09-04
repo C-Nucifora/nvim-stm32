@@ -69,6 +69,64 @@ describe("nvim-stm32.ui.info.lines", function()
     local text = table.concat(info.lines(no_build), "\n")
     assert.is_truthy(text:find("no build file", 1, true))
   end)
+
+  it("lists project images, MCUs, configuration, and known artifacts", function()
+    local project = {
+      id = "/w/dual",
+      root = "/w/dual",
+      kind = "cmake_presets",
+      build = { marker = "/w/dual/CMakePresets.json" },
+      images = {
+        { id = "CM4", target = { mcu = "STM32H747XIHx" } },
+        { id = "CM7", target = { mcu = "STM32H747XIHx" } },
+      },
+    }
+    local state = {
+      configuration = "Debug",
+      artifacts = {
+        { image_id = "CM4", kind = "elf", path = "/w/dual/build/Debug/cm4.elf" },
+      },
+    }
+    local text = table.concat(info.lines(project, state), "\n")
+
+    assert.matches("Project: /w/dual", text, 1, true)
+    assert.matches("CM4: STM32H747XIHx", text, 1, true)
+    assert.matches("CM7: STM32H747XIHx", text, 1, true)
+    assert.matches("Configuration: Debug", text, 1, true)
+    assert.matches("cm4.elf", text, 1, true)
+  end)
+
+  it("keeps detailed target evidence in the project report", function()
+    local image_target = target()
+    local project = {
+      id = "/w/s5/dt",
+      root = "/w/s5/dt",
+      kind = "cmake_presets",
+      build = {
+        adapter = "cmake_presets",
+        marker = "/w/s5/dt/CMakePresets.json",
+      },
+      images = { { id = "application", target = image_target } },
+    }
+    local text = table.concat(
+      info.lines(project, {
+        configuration = "Debug",
+        artifacts = {},
+      }),
+      "\n"
+    )
+
+    assert.matches("Board:   NUCLEO-F429ZI", text, 1, true)
+    assert.matches("Marker: CMakePresets.json", text, 1, true)
+    assert.matches("application: STM32F429ZITx (STM32F4, exact)", text, 1, true)
+    assert.matches("Core:    cortex-m4 with fpv4-sp-d16", text, 1, true)
+    assert.matches("Memory:  2048 KiB flash, 256 KiB RAM", text, 1, true)
+    assert.matches("OpenOCD: target/stm32f4x.cfg", text, 1, true)
+    assert.matches("Signals: 2 of 2 agree", text, 1, true)
+    assert.matches("dt.ioc", text, 1, true)
+    local _, projects = text:gsub("Project:", "")
+    assert.equals(1, projects)
+  end)
 end)
 
 describe(":STM32Info", function()

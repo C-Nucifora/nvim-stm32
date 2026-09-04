@@ -30,4 +30,68 @@ function M.get_config()
   return M.config or config.resolve()
 end
 
+--- Return the in-memory session for a project root or resolved project.
+---@param root table|string
+---@return table
+function M.get_session(root)
+  return require("nvim-stm32.session").get(root)
+end
+
+--- Resolve the STM32 project containing a directory.
+---@param dir? string
+---@return table|nil, table|nil
+function M.resolve_project(dir)
+  return require("nvim-stm32.discover.project").resolve(dir)
+end
+
+local function operation_module(kind)
+  if kind ~= "build" then
+    return nil,
+      require("nvim-stm32.model").error({
+        code = "operation-kind-unsupported",
+        message = "nvim-stm32: unsupported operation kind " .. tostring(kind),
+        operation = tostring(kind),
+        hint = "use the build operation",
+      })
+  end
+  return require("nvim-stm32.operations.build")
+end
+
+--- Plan an operation without running it.
+---@param kind string
+---@param opts? table
+---@return table|nil, table|nil
+function M.plan(kind, opts)
+  opts = vim.deepcopy(opts or {})
+  local operations, kind_err = operation_module(kind)
+  if not operations then
+    return nil, kind_err
+  end
+  local project = opts.project
+  if not project then
+    local project_err
+    project, project_err = M.resolve_project(opts.dir)
+    if not project then
+      return nil, project_err
+    end
+  end
+  opts.project = nil
+  local resolved = vim.tbl_deep_extend("force", M.get_config(), opts)
+  resolved.configuration = opts.configuration or opts.preset or resolved.preset
+  return operations.plan(project, resolved)
+end
+
+--- Plan and run an operation.
+---@param kind string
+---@param opts? table
+---@param callback? function
+---@return table|nil, table|nil
+function M.run(kind, opts, callback)
+  local plan, plan_err = M.plan(kind, opts)
+  if not plan then
+    return nil, plan_err
+  end
+  return require("nvim-stm32.operation").run(plan, opts, callback)
+end
+
 return M

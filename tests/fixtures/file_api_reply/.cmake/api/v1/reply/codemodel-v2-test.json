@@ -1,0 +1,33 @@
+{
+  "kind": "codemodel",
+  "version": { "major": 2, "minor": 7 },
+  "paths": {
+    "source": "/placeholder/source",
+    "build": "/placeholder/build"
+  },
+  "configurations": [
+    {
+      "name": "Debug",
+      "directories": [
+        {
+          "source": "firmware/cm4",
+          "build": "firmware/cm4"
+        }
+      ],
+      "targets": [
+        {
+          "name": "app",
+          "id": "app::@6890427a1f51a3e7e1df",
+          "directoryIndex": 0,
+          "jsonFile": "target-app-test.json"
+        },
+        {
+          "name": "helper",
+          "id": "helper::@6890427a1f51a3e7e1df",
+          "directoryIndex": 0,
+          "jsonFile": "target-helper-test.json"
+        }
+      ]
+    }
+  ]
+}

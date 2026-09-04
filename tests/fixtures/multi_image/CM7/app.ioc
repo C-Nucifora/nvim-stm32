@@ -1,0 +1,5 @@
+Mcu.Name=STM32H747XIHx
+Mcu.UserName=STM32H747_CM7
+Mcu.IP0=NVIC
+ProjectManager.ProjectName=dual_core_cm7
+ProjectManager.DeviceId=STM32H747XIHx

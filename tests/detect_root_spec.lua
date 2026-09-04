@@ -45,10 +45,10 @@ describe("nvim-stm32.detect.root", function()
     assert.equals(fixture("nucleo_cmake"), (detect.root(fixture("nucleo_cmake"))))
   end)
 
-  it("stops at the nearest root, not the outermost one", function()
+  it("prefers an outer strong root over generated nested CMake", function()
     local root, backend = detect.root(fixture("nucleo_cmake/cmake/stm32cubemx"))
-    assert.equals(fixture("nucleo_cmake/cmake/stm32cubemx"), root)
-    assert.equals("cmake_plain", backend)
+    assert.equals(fixture("nucleo_cmake"), root)
+    assert.equals("cmake_presets", backend)
   end)
 
   it("returns nil below a git root that holds no markers", function()
