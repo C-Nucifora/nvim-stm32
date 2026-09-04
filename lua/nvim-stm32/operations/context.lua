@@ -58,8 +58,12 @@ end
 function M.resolve_configuration(project, opts, available)
   opts = opts or {}
   local requested = opts.configuration
-    or opts.preset
-    or session.get(project).configuration
+  if requested == nil then
+    requested = opts.preset
+  end
+  if requested == nil then
+    requested = session.get(project).configuration
+  end
   local selected = named_configuration(available, requested)
   if selected == false then
     return nil,

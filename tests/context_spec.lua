@@ -96,6 +96,15 @@ describe("nvim-stm32 operation context", function()
     assert.equals("Debug", resolved.configuration.name)
   end)
 
+  it("rejects an explicit false configuration instead of using the session", function()
+    session.select(root, { configuration = "Release" })
+
+    local resolved, err = context.resolve(project(root), { configuration = false })
+
+    assert.is_nil(resolved)
+    assert.equals("configuration-not-found", err.code)
+  end)
+
   it("selects all images in project order without a selection", function()
     local multi = project(root, {
       { id = "CM4", name = "CM4", target = {} },
