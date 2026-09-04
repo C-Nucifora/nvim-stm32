@@ -111,8 +111,11 @@ function M.run(commands, opts, callback)
     end
   end
 
-  local function cancel_active(reason)
+  local function cancel_active(reason, expected_child)
     if finished or not active_child or state == "cancelling" then
+      return false
+    end
+    if expected_child and active_child ~= expected_child then
       return false
     end
 
@@ -125,13 +128,16 @@ function M.run(commands, opts, callback)
     child:kill(15)
 
     close_timer(kill_timer)
-    kill_timer = vim.uv.new_timer()
-    kill_timer:unref()
-    kill_timer:start(1000, 0, function()
-      if not kill_timer:is_closing() then
-        kill_timer:close()
+    local timer = vim.uv.new_timer()
+    kill_timer = timer
+    timer:unref()
+    timer:start(1000, 0, function()
+      if not timer:is_closing() then
+        timer:close()
       end
-      kill_timer = nil
+      if kill_timer == timer then
+        kill_timer = nil
+      end
       if not finished and active_child == child then
         child:kill(9)
       end
@@ -168,22 +174,33 @@ function M.run(commands, opts, callback)
     last_command = command.argv
     state = "running"
     local child
+    local early_exit
     local function on_stream(_, chunk)
       append_output(chunk)
     end
-    local function on_exit(result)
+    local function retire_child(result)
+      if finished or active_child ~= child then
+        return
+      end
+      active_child = nil
+      clear_child_timers()
       vim.schedule(function()
-        if finished or active_child ~= child then
+        if finished then
           return
         end
-        active_child = nil
-        clear_child_timers()
         if cancelled or result.code ~= 0 then
           finish(result.code, result.signal, command.argv)
         else
           run_next()
         end
       end)
+    end
+    local function on_exit(result)
+      if not child then
+        early_exit = result
+        return
+      end
+      retire_child(result)
     end
 
     local ok, system_or_err = pcall(
@@ -202,12 +219,23 @@ function M.run(commands, opts, callback)
 
     child = system_or_err
     active_child = child
+    if early_exit then
+      retire_child(early_exit)
+      return
+    end
     local timeout_ms = command.timeout_ms or opts.timeout_ms
     if timeout_ms and timeout_ms > 0 then
-      timeout_timer = vim.uv.new_timer()
-      timeout_timer:unref()
-      timeout_timer:start(timeout_ms, 0, function()
-        cancel_active("timeout")
+      local timer = vim.uv.new_timer()
+      timeout_timer = timer
+      timer:unref()
+      timer:start(timeout_ms, 0, function()
+        if timeout_timer == timer then
+          timeout_timer = nil
+        end
+        if not timer:is_closing() then
+          timer:close()
+        end
+        cancel_active("timeout", child)
       end)
     end
   end
