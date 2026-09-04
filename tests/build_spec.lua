@@ -16,7 +16,7 @@ describe("nvim-stm32 build command resolution", function()
     }))
     assert.same({
       { "cmake", "--preset", "Debug" },
-      { "cmake", "--build", "build/Debug" },
+      { "cmake", "--build", "--preset", "Debug" },
     }, commands)
   end)
 

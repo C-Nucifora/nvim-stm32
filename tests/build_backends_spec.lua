@@ -2,8 +2,6 @@ local presets = require("nvim-stm32.backend.build.cmake_presets")
 local plain = require("nvim-stm32.backend.build.cmake_plain")
 local make = require("nvim-stm32.backend.build.make")
 
-local target = { root = "/work/fw", build_backend = "cmake_presets" }
-
 local function fixture(rel)
   local here =
     vim.fn.fnamemodify(vim.fn.resolve(debug.getinfo(1, "S").source:sub(2)), ":p:h")
@@ -12,17 +10,19 @@ end
 
 describe("nvim-stm32 build backends", function()
   it("builds preset CMake argv without a shell", function()
+    local target = { root = fixture("nucleo_cmake"), build_backend = "cmake_presets" }
     assert.same(
       { "cmake", "--preset", "Debug" },
       presets.configure_cmd(target, { preset = "Debug" })
     )
     assert.same(
-      { "cmake", "--build", "build/Debug" },
+      { "cmake", "--build", "--preset", "Debug" },
       presets.cmd(target, { preset = "Debug" })
     )
   end)
 
   it("requires a preset for preset CMake commands", function()
+    local target = { root = fixture("nucleo_cmake"), build_backend = "cmake_presets" }
     assert.has_error(function()
       presets.configure_cmd(target, {})
     end, "preset is required")
@@ -79,7 +79,7 @@ describe("nvim-stm32 CMake preset discovery", function()
 
     local names, err = presets.presets(root)
     assert.is_nil(names)
-    assert.matches("invalid CMakePresets.json", err, 1, true)
+    assert.equals("cmake-presets-json", err.code)
     vim.fn.delete(root, "rf")
   end)
 
@@ -89,7 +89,7 @@ describe("nvim-stm32 CMake preset discovery", function()
 
     local names, err = presets.presets(root)
     assert.is_nil(names)
-    assert.matches("CMakePresets.json", err, 1, true)
+    assert.equals("cmake-presets-read", err.code)
     vim.fn.delete(root, "rf")
   end)
 end)
