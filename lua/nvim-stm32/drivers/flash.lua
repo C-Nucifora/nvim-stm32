@@ -27,9 +27,9 @@ local function resolve_named(cfg, name)
         "choose cubeprogrammer, stlink, or openocd"
       )
   end
-  local available, tool = driver.available(cfg)
-  if available and tool then
-    return driver, tool
+  local available, resolved_tools = driver.available(cfg)
+  if available and resolved_tools then
+    return driver, resolved_tools
   end
   return nil,
     resolution_error(
@@ -45,7 +45,7 @@ end
 --- pin comes next. Only the unpinned path walks `flash_order`.
 ---@param cfg Stm32Config|table
 ---@param opts? table
----@return table|nil, string|table
+---@return table|nil, table
 function M.resolve(cfg, opts)
   cfg = cfg or {}
   opts = opts or {}
@@ -66,9 +66,9 @@ function M.resolve(cfg, opts)
           "fix flash_order so every entry names a supported backend"
         )
     end
-    local available, tool = driver.available(cfg)
-    if available and tool then
-      return driver, tool
+    local available, resolved_tools = driver.available(cfg)
+    if available and resolved_tools then
+      return driver, resolved_tools
     end
   end
 

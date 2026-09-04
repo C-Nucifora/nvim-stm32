@@ -49,7 +49,7 @@ local function command(tool, probe, action)
       "-f",
       "interface/stlink.cfg",
       "-c",
-      "adapter serial " .. probe.serial,
+      "adapter serial " .. tcl_word("probe.serial", probe.serial),
       "-f",
       target.openocd_cfg,
       "-c",
@@ -60,10 +60,13 @@ local function command(tool, probe, action)
 end
 
 ---@param cfg Stm32Config
----@return boolean, string|nil
+---@return boolean, table|nil
 function M.available(cfg)
   local tool = tools.openocd(cfg or {})
-  return tool ~= nil, tool
+  if not tool then
+    return false, nil
+  end
+  return true, { program = tool, identify = tool }
 end
 
 ---@param tool string

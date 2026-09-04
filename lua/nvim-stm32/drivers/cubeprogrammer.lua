@@ -39,10 +39,13 @@ local function identity_error()
 end
 
 ---@param cfg Stm32Config
----@return boolean, string|nil
+---@return boolean, table|nil
 function M.available(cfg)
   local tool = tools.programmer(cfg or {})
-  return tool ~= nil, tool
+  if not tool then
+    return false, nil
+  end
+  return true, { program = tool, identify = tool, list = tool }
 end
 
 ---@param tool string

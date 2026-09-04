@@ -25,6 +25,16 @@ describe("nvim-stm32 OpenOCD driver commands", function()
     }, driver.identify_command(openocd, probe).argv)
   end)
 
+  it("braces a serial that contains Tcl command substitution", function()
+    local unsafe_probe = vim.deepcopy(probe)
+    unsafe_probe.serial = "[reset]"
+
+    assert.equals(
+      "adapter serial {[reset]}",
+      driver.identify_command(openocd, unsafe_probe).argv[5]
+    )
+  end)
+
   it("programs and verifies an ELF before shutdown", function()
     assert.same(
       {

@@ -36,10 +36,15 @@ local function driver_error(code, message, hint)
 end
 
 ---@param cfg Stm32Config
----@return boolean, string|nil
+---@return boolean, table|nil
 function M.available(cfg)
-  local tool = tools.stlink(cfg or {})
-  return tool ~= nil, tool
+  cfg = cfg or {}
+  local program = tools.stlink(cfg)
+  local identify = tools.stinfo(cfg)
+  if not program or not identify then
+    return false, nil
+  end
+  return true, { program = program, identify = identify, list = identify }
 end
 
 ---@param tool string
