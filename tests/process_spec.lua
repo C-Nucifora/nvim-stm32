@@ -78,4 +78,32 @@ describe("nvim-stm32.process.run", function()
     assert.equals(1, done.code)
     assert.equals("stdout 1\nstderr 1\n", done.output)
   end)
+
+  it("forwards stream chunks outside fast-event context", function()
+    local done
+    local output_was_fast
+    process.system = function(_, opts, callback)
+      local timer = vim.uv.new_timer()
+      timer:start(0, 0, function()
+        opts.stdout(nil, "streamed\n")
+        timer:stop()
+        timer:close()
+        callback({ code = 0, signal = 0 })
+      end)
+      return timer
+    end
+
+    process.run({ { "make" } }, {
+      on_output = function()
+        output_was_fast = vim.in_fast_event()
+      end,
+    }, function(result)
+      done = result
+    end)
+
+    assert.is_true(vim.wait(100, function()
+      return done ~= nil
+    end))
+    assert.is_false(output_was_fast)
+  end)
 end)
