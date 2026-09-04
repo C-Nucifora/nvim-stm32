@@ -71,6 +71,35 @@ describe("nvim-stm32 CMake preset resolution", function()
     vim.fn.delete(root, "rf")
   end)
 
+  it("gives the first inherited configure preset precedence", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({
+      [[{"configurePresets":[{"name":"first","hidden":true,"binaryDir":"${sourceDir}/first/${presetName}"},{"name":"second","hidden":true,"binaryDir":"${sourceDir}/second/${presetName}"},{"name":"Debug","inherits":["first","second"]}]}]],
+    }, root .. "/CMakePresets.json")
+
+    local configs = assert(presets.configurations(root))
+    assert.same({
+      {
+        name = "Debug",
+        configure_preset = "Debug",
+        binary_dir = root .. "/first/Debug",
+      },
+    }, configs)
+    vim.fn.delete(root, "rf")
+  end)
+
+  it("does not select a build preset whose configure preset is hidden", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({
+      [[{"configurePresets":[{"name":"base","hidden":true,"binaryDir":"${sourceDir}/build/${presetName}"}],"buildPresets":[{"name":"Debug","configurePreset":"base"}]}]],
+    }, root .. "/CMakePresets.json")
+
+    assert.same({}, assert(presets.configurations(root)))
+    vim.fn.delete(root, "rf")
+  end)
+
   it("reports cycles and missing inherited presets as structured errors", function()
     local root = vim.fn.tempname()
     vim.fn.mkdir(root, "p")

@@ -110,7 +110,9 @@ local function resolve(entries, sources, name, stack, cache)
   stack[#stack + 1] = name
   stack[name] = true
   local resolved = {}
-  for _, parent in ipairs(inherited_names(preset.inherits)) do
+  local parents = inherited_names(preset.inherits)
+  for index = #parents, 1, -1 do
+    local parent = parents[index]
     if type(parent) ~= "string" or parent == "" then
       stack[name] = nil
       table.remove(stack)
@@ -188,13 +190,15 @@ function M.configurations(root)
       if not configure then
         return nil, configure_err
       end
-      configurations[#configurations + 1] = model.configuration({
-        name = build.name,
-        configure_preset = configure_name,
-        build_preset = build.name,
-        binary_dir = binary_dir(root, configure),
-      })
-      paired[configure_name] = true
+      if not configure.hidden then
+        configurations[#configurations + 1] = model.configuration({
+          name = build.name,
+          configure_preset = configure_name,
+          build_preset = build.name,
+          binary_dir = binary_dir(root, configure),
+        })
+        paired[configure_name] = true
+      end
     end
   end
 

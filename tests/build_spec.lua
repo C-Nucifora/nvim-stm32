@@ -37,6 +37,26 @@ describe("nvim-stm32 build command resolution", function()
     assert.is_nil(commands)
     assert.matches("unknown build backend", err, 1, true)
   end)
+
+  it(
+    "returns a string error for an explicit preset with malformed preset JSON",
+    function()
+      local root = vim.fn.tempname()
+      vim.fn.mkdir(root, "p")
+      vim.fn.writefile({ "not json" }, root .. "/CMakePresets.json")
+
+      local commands, err = build.commands(
+        { root = root, build_backend = "cmake_presets" },
+        {
+          preset = "Debug",
+        }
+      )
+      assert.is_nil(commands)
+      assert.equals("string", type(err))
+      assert.matches("invalid JSON", err, 1, true)
+      vim.fn.delete(root, "rf")
+    end
+  )
 end)
 
 describe("nvim-stm32 ELF discovery", function()
@@ -223,6 +243,42 @@ describe("nvim-stm32 current build", function()
 
     assert.equals(fixture("nucleo_cmake"), captured.target.root)
     assert.equals("Release", captured.opts.preset)
+  end)
+end)
+
+describe("nvim-stm32 preset error presentation", function()
+  local detect = require("nvim-stm32.detect")
+  local original_target
+  local original_notify
+
+  before_each(function()
+    original_target = detect.target
+    original_notify = vim.notify
+  end)
+
+  after_each(function()
+    detect.target = original_target
+    vim.notify = original_notify
+  end)
+
+  it("notifies with a string when the preset picker cannot load presets", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({ "not json" }, root .. "/CMakePresets.json")
+    local notification
+    detect.target = function()
+      return { root = root, build_backend = "cmake_presets" }
+    end
+    vim.notify = function(message, level)
+      assert.equals("string", type(message))
+      notification = { message = message, level = level }
+    end
+
+    local ok, err = pcall(build.current)
+    assert.is_true(ok, err)
+    assert.matches("invalid JSON", notification.message, 1, true)
+    assert.equals(vim.log.levels.ERROR, notification.level)
+    vim.fn.delete(root, "rf")
   end)
 end)
 

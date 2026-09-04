@@ -32,9 +32,17 @@ function M.commands(target, opts)
 
   local commands = {}
   if backend.configure_cmd then
-    commands[#commands + 1] = backend.configure_cmd(target, opts)
+    local configure_command, configure_err = backend.configure_cmd(target, opts)
+    if not configure_command then
+      return nil, configure_err
+    end
+    commands[#commands + 1] = configure_command
   end
-  commands[#commands + 1] = backend.cmd(target, opts)
+  local build_command, build_err = backend.cmd(target, opts)
+  if not build_command then
+    return nil, build_err
+  end
+  commands[#commands + 1] = build_command
   return commands
 end
 
