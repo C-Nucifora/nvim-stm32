@@ -145,6 +145,20 @@ function M.gdb(cfg)
   return resolve_toolchain("arm-none-eabi-gdb", cfg, cfg.gdb_path)
 end
 
+--- arm-none-eabi-size, or nil.
+---@param cfg Stm32Config
+---@return string|nil
+function M.size(cfg)
+  return resolve_toolchain("arm-none-eabi-size", cfg, nil)
+end
+
+--- arm-none-eabi-objdump, or nil.
+---@param cfg Stm32Config
+---@return string|nil
+function M.objdump(cfg)
+  return resolve_toolchain("arm-none-eabi-objdump", cfg, nil)
+end
+
 --- openocd, or nil.
 ---@param cfg Stm32Config
 ---@return string|nil

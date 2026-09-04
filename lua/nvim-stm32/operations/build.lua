@@ -29,7 +29,25 @@ local function image_targets(project, selected)
   return targets
 end
 
-local function commands_for(project, adapter, configuration, targets)
+local function clean_command(project, adapter, configuration)
+  if adapter == "cmake_presets" then
+    return presets.build_command(project, configuration, { "clean" })
+  end
+  if adapter == "cmake_plain" then
+    return model.command({
+      argv = { "cmake", "--build", "build", "--target", "clean" },
+      cwd = project.root,
+      lifecycle = "short",
+    })
+  end
+  return model.command({
+    argv = { "make", "clean" },
+    cwd = project.root,
+    lifecycle = "short",
+  })
+end
+
+local function build_commands(project, adapter, configuration, targets)
   if adapter == "cmake_presets" then
     return {
       presets.configure_command(project, configuration),
@@ -56,8 +74,29 @@ local function commands_for(project, adapter, configuration, targets)
   }
 end
 
+local function commands_for(project, adapter, configuration, targets, mode)
+  if mode == "clean" then
+    return { clean_command(project, adapter, configuration) }
+  end
+  local commands = build_commands(project, adapter, configuration, targets)
+  if mode == "rebuild" then
+    table.insert(commands, 1, clean_command(project, adapter, configuration))
+  end
+  return commands
+end
+
 function M.plan(project, opts)
   opts = vim.deepcopy(opts or {})
+  local mode = opts.mode or "build"
+  if mode ~= "build" and mode ~= "clean" and mode ~= "rebuild" then
+    return nil,
+      model.error({
+        code = "build-mode-invalid",
+        message = "nvim-stm32: unknown build lifecycle mode " .. tostring(mode),
+        operation = "build",
+        hint = "use build, clean, or rebuild",
+      })
+  end
   local resolved, resolved_err = context.resolve(project, opts)
   if not resolved then
     return nil, resolved_err
@@ -74,9 +113,10 @@ function M.plan(project, opts)
   local metadata = {
     adapter = adapter,
     configuration = vim.deepcopy(configuration),
+    mode = mode,
     project = project,
   }
-  if adapter == "cmake_presets" or adapter == "cmake_plain" then
+  if mode ~= "clean" and (adapter == "cmake_presets" or adapter == "cmake_plain") then
     metadata.query_path = binary_dir
       .. "/.cmake/api/v1/query/client-nvim-stm32/query.json"
     metadata.reply_dir = binary_dir .. "/.cmake/api/v1/reply"
@@ -95,7 +135,8 @@ function M.plan(project, opts)
       project,
       adapter,
       configuration,
-      image_targets(project, selected)
+      image_targets(project, selected),
+      mode
     ),
     locks = {},
     reset_policy = "none",

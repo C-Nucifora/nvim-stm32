@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+ 0x4cbc	   0x68	  0xed8	  23548	   5bfc	dt.elf

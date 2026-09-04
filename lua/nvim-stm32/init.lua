@@ -45,6 +45,12 @@ function M.resolve_project(dir)
 end
 
 local function operation_module(kind)
+  if kind == "build" or kind == "clean" or kind == "rebuild" then
+    return require("nvim-stm32.operations.build")
+  end
+  if kind == "analyze" then
+    return require("nvim-stm32.operations.analyze")
+  end
   if kind ~= "build" then
     return nil,
       require("nvim-stm32.model").error({
@@ -54,7 +60,6 @@ local function operation_module(kind)
         hint = "use the build operation",
       })
   end
-  return require("nvim-stm32.operations.build")
 end
 
 --- Plan an operation without running it.
@@ -76,6 +81,9 @@ function M.plan(kind, opts)
     end
   end
   opts.project = nil
+  if kind == "clean" or kind == "rebuild" then
+    opts.mode = kind
+  end
   local resolved = vim.tbl_deep_extend("force", M.get_config(), opts)
   resolved.configuration = opts.configuration or opts.preset or resolved.preset
   return operations.plan(project, resolved)

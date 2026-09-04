@@ -97,6 +97,20 @@ describe("nvim-stm32.process.run", function()
     assert.equals(0, done.signal)
     assert.equals("stdout 1\nstderr 1\nstdout 2\nstderr 2\n", done.output)
     assert.same(commands[2], done.command)
+    assert.same({
+      {
+        argv = commands[1],
+        output = "stdout 1\nstderr 1\n",
+        code = 0,
+        signal = 0,
+      },
+      {
+        argv = commands[2],
+        output = "stdout 2\nstderr 2\n",
+        code = 0,
+        signal = 0,
+      },
+    }, done.commands)
     assert.is_false(done.cancelled)
     assert.is_false(done.timed_out)
     assert.is_false(done.truncated)
@@ -122,6 +136,14 @@ describe("nvim-stm32.process.run", function()
     assert.same(commands[1], done.command)
     assert.equals(1, done.code)
     assert.equals("stdout 1\nstderr 1\n", done.output)
+    assert.same({
+      {
+        argv = commands[1],
+        output = "stdout 1\nstderr 1\n",
+        code = 1,
+        signal = 0,
+      },
+    }, done.commands)
   end)
 
   it("forwards stream chunks outside fast-event context", function()

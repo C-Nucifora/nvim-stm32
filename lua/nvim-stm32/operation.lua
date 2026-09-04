@@ -136,6 +136,35 @@ local function successful_result(plan, process_result)
   return model.result(result)
 end
 
+local function successful_clean_result(plan, process_result)
+  local selected = {}
+  for _, image_id in ipairs(plan.images) do
+    selected[image_id] = true
+  end
+  local configuration = plan.metadata.configuration.name
+  local state = session.get(plan.project_id)
+  state.artifacts = vim.tbl_filter(function(artifact)
+    return not (selected[artifact.image_id] and artifact.configuration == configuration)
+  end, state.artifacts)
+  session.select(plan.project_id, {
+    artifacts = state.artifacts,
+    configuration = configuration,
+  })
+  return model.result({
+    ok = true,
+    code = process_result.code,
+    output = process_result.output or "",
+    artifacts = {},
+    duration_ms = process_result.started_ns
+        and process_result.ended_ns
+        and (process_result.ended_ns - process_result.started_ns) / 1000000
+      or nil,
+    started_ns = process_result.started_ns,
+    finished_ns = process_result.ended_ns,
+    metadata = { operation_id = plan.id, mode = "clean" },
+  })
+end
+
 local function validate_build_plan(plan)
   if type(plan.metadata) ~= "table" then
     error("plan.metadata: expected table")
@@ -198,6 +227,16 @@ function M.run(plan, opts, callback)
       validate_build_plan(copied_or_err)
       return copied_or_err
     end)
+  elseif valid and copied_or_err.kind == "analyze" then
+    valid, copied_or_err = pcall(function()
+      if type(copied_or_err.metadata) ~= "table" then
+        error("plan.metadata: expected table")
+      end
+      if type(copied_or_err.metadata.inputs) ~= "table" then
+        error("plan.metadata.inputs: expected table")
+      end
+      return copied_or_err
+    end)
   elseif valid then
     valid = false
     copied_or_err = "unsupported operation kind " .. copied_or_err.kind
@@ -245,6 +284,12 @@ function M.run(plan, opts, callback)
       if completed then
         return
       end
+      if copied.kind == "analyze" then
+        complete(
+          require("nvim-stm32.operations.analyze").complete(copied, process_result)
+        )
+        return
+      end
       if process_result.code ~= 0 then
         local err = operation_error(
           "process-failed",
@@ -256,7 +301,12 @@ function M.run(plan, opts, callback)
         return
       end
 
-      local result, result_err = successful_result(copied, process_result)
+      local result, result_err
+      if copied.metadata.mode == "clean" then
+        result = successful_clean_result(copied, process_result)
+      else
+        result, result_err = successful_result(copied, process_result)
+      end
       if not result then
         complete(result_for_failure(copied, result_err, process_result))
         return
@@ -264,7 +314,9 @@ function M.run(plan, opts, callback)
       session.select(copied.project_id, {
         configuration = copied.metadata.configuration.name,
       })
-      session.record(copied.project_id, result)
+      if copied.metadata.mode ~= "clean" then
+        session.record(copied.project_id, result)
+      end
       complete(result)
     end
   )

@@ -62,6 +62,8 @@ function M.run(commands, opts, callback)
   local timed_out = false
   local finished = false
   local last_command
+  local command_output = ""
+  local command_results = {}
   local started_ns = vim.uv.hrtime()
   local max_output_bytes = opts.max_output_bytes or DEFAULT_MAX_OUTPUT_BYTES
 
@@ -85,6 +87,7 @@ function M.run(commands, opts, callback)
       signal = signal or 0,
       output = output,
       command = command or last_command,
+      commands = vim.deepcopy(command_results),
       cancelled = cancelled,
       timed_out = timed_out,
       truncated = truncated,
@@ -102,6 +105,10 @@ function M.run(commands, opts, callback)
     if #output > max_output_bytes then
       output = output:sub(#output - max_output_bytes + 1)
       truncated = true
+    end
+    command_output = command_output .. chunk
+    if #command_output > max_output_bytes then
+      command_output = command_output:sub(#command_output - max_output_bytes + 1)
     end
 
     if opts.on_output then
@@ -172,6 +179,7 @@ function M.run(commands, opts, callback)
 
     command = normalize(command)
     last_command = command.argv
+    command_output = ""
     state = "running"
     local child
     local early_exit
@@ -184,6 +192,12 @@ function M.run(commands, opts, callback)
       end
       active_child = nil
       clear_child_timers()
+      command_results[#command_results + 1] = {
+        argv = vim.deepcopy(command.argv),
+        output = command_output,
+        code = result.code or 0,
+        signal = result.signal or 0,
+      }
       vim.schedule(function()
         if finished then
           return
