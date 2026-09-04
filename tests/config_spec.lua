@@ -1,0 +1,48 @@
+local config = require("nvim-stm32.config")
+
+describe("nvim-stm32.config", function()
+  it("returns the documented defaults", function()
+    local cfg = config.resolve()
+    assert.is_nil(cfg.toolchain_path)
+    assert.is_nil(cfg.flash_backend)
+    assert.same({ "cubeprogrammer", "stlink", "openocd" }, cfg.flash_order)
+    assert.equals(115200, cfg.monitor.baud)
+    assert.is_true(cfg.compiler_nvim)
+  end)
+
+  it("merges user opts over the defaults", function()
+    local cfg = config.resolve({ preset = "Release", compiler_nvim = false })
+    assert.equals("Release", cfg.preset)
+    assert.is_false(cfg.compiler_nvim)
+    -- untouched keys keep their defaults
+    assert.equals(115200, cfg.monitor.baud)
+  end)
+
+  it("merges nested tables key by key", function()
+    local cfg = config.resolve({ monitor = { baud = 9600 } })
+    assert.equals(9600, cfg.monitor.baud)
+    assert.is_nil(cfg.monitor.device)
+  end)
+
+  it("does not mutate the defaults", function()
+    config.resolve({ flash_order = { "openocd" } })
+    assert.same({ "cubeprogrammer", "stlink", "openocd" }, config.defaults.flash_order)
+  end)
+
+  it("expands ~ in toolchain_path", function()
+    local cfg = config.resolve({ toolchain_path = "~/toolchains/bin" })
+    assert.equals(vim.env.HOME .. "/toolchains/bin", cfg.toolchain_path)
+  end)
+
+  it("rejects a wrongly-typed option", function()
+    assert.has_error(function()
+      config.resolve({ compiler_nvim = "yes" })
+    end)
+  end)
+
+  it("rejects an unknown flash backend", function()
+    assert.has_error(function()
+      config.resolve({ flash_order = { "jlink" } })
+    end)
+  end)
+end)
