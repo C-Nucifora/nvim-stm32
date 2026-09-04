@@ -56,12 +56,6 @@ describe("nvim-stm32.tools.resolve", function()
     assert.is_nil(tools.resolve("FakeProgrammer", dir .. "/nope", {}))
   end)
 
-  it("expands ~ in an override", function()
-    -- $HOME itself is always a directory, never executable, so this asserts the
-    -- expansion happened rather than the lookup succeeding.
-    assert.is_nil(tools.resolve("FakeProgrammer", "~", {}))
-  end)
-
   it("falls back to the globs and picks the highest version", function()
     assert.equals(
       exe,
@@ -71,6 +65,31 @@ describe("nvim-stm32.tools.resolve", function()
 
   it("returns nil when nothing matches", function()
     assert.is_nil(tools.resolve("DefinitelyNotAToolOnThisBox", nil, { "/nowhere/*/x" }))
+  end)
+end)
+
+describe("nvim-stm32.tools.resolve tilde expansion", function()
+  -- The other resolve() fixtures live under vim.fn.tempname(), which is
+  -- under /var/folders and unreachable by any "~" path, so a tilde override
+  -- needs its own fixture under the real home directory.
+  local suffix, home_dir, home_exe
+
+  before_each(function()
+    suffix = tostring(vim.uv.hrtime())
+    home_dir = vim.env.HOME .. "/.cache/nvim-stm32-test-" .. suffix
+    vim.fn.mkdir(home_dir .. "/bin", "p")
+    home_exe = home_dir .. "/bin/FakeProgrammer"
+    vim.fn.writefile({ "#!/bin/sh" }, home_exe)
+    vim.uv.fs_chmod(home_exe, 493) -- 0755
+  end)
+
+  after_each(function()
+    vim.fn.delete(home_dir, "rf")
+  end)
+
+  it("expands ~ in an override that resolves to a real executable", function()
+    local override = "~/.cache/nvim-stm32-test-" .. suffix .. "/bin/FakeProgrammer"
+    assert.equals(home_exe, tools.resolve("FakeProgrammer", override, {}))
   end)
 end)
 
