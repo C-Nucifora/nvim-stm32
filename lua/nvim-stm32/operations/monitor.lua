@@ -171,9 +171,21 @@ local function result(plan, process_result, ok, status, err)
   })
 end
 
+local function failed_during_setup(plan, process_result)
+  local command = plan.commands[process_result.command_index]
+  return command ~= nil
+    and (
+      command.lifecycle ~= "stream"
+      or (
+        plan.metadata.platform == "Darwin"
+        and process_result.code == uart.SETUP_FAILURE_CODE
+      )
+    )
+end
+
 function M.complete(plan, process_result)
   if process_result.timed_out then
-    local setup = process_result.command_index == 1
+    local setup = failed_during_setup(plan, process_result)
     return result(
       plan,
       process_result,
@@ -202,7 +214,7 @@ function M.complete(plan, process_result)
     )
   end
   if not process.succeeded(process_result) then
-    local setup = process_result.command_index == 1
+    local setup = failed_during_setup(plan, process_result)
     return result(
       plan,
       process_result,

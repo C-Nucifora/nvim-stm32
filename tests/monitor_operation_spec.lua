@@ -148,6 +148,24 @@ describe("nvim-stm32 monitor operation plans", function()
     assert.equals("stream", plan.commands[2].lifecycle)
     assert.is_nil(plan.commands[2].timeout_ms)
   end)
+
+  it("plans one unbounded same-descriptor stream on Darwin", function()
+    local device = "/dev/cu.usb modem"
+    local opts = {
+      platform = "Darwin",
+      device = device,
+      monitor = { baud = 115200 },
+      stat = function(path)
+        return path == device and { type = "char" } or nil
+      end,
+    }
+
+    local plan = assert(monitor.plan(project(root), opts))
+
+    assert.equals(1, #plan.commands)
+    assert.equals("stream", plan.commands[1].lifecycle)
+    assert.is_nil(plan.commands[1].timeout_ms)
+  end)
 end)
 
 describe("nvim-stm32 monitor operation lifecycle", function()
@@ -276,6 +294,52 @@ describe("nvim-stm32 monitor operation lifecycle", function()
 
     assert.is_false(result.ok)
     assert.equals("monitor-disconnected", result.error.code)
+  end)
+
+  it("reports failure from a combined Darwin stream as disconnected", function()
+    local device = "/dev/cu.usbmodem0"
+    local plan = assert(monitor.plan(project(root), {
+      platform = "Darwin",
+      device = device,
+      monitor = { baud = 115200 },
+      stat = function(path)
+        return path == device and { type = "char" } or nil
+      end,
+    }))
+
+    local result = monitor.complete(plan, {
+      code = 1,
+      signal = 0,
+      command_index = 1,
+      output = "cat: device disconnected\n",
+    })
+
+    assert.is_false(result.ok)
+    assert.equals("monitor-disconnected", result.error.code)
+    assert.equals("disconnected", result.metadata.status)
+  end)
+
+  it("reports a combined Darwin open or stty failure as setup failure", function()
+    local device = "/dev/cu.usbmodem0"
+    local plan = assert(monitor.plan(project(root), {
+      platform = "Darwin",
+      device = device,
+      monitor = { baud = 115200 },
+      stat = function(path)
+        return path == device and { type = "char" } or nil
+      end,
+    }))
+
+    local result = monitor.complete(plan, {
+      code = 125,
+      signal = 0,
+      command_index = 1,
+      output = "stty: ioctl: Inappropriate ioctl for device\n",
+    })
+
+    assert.is_false(result.ok)
+    assert.equals("monitor-setup-failed", result.error.code)
+    assert.equals("setup-failed", result.metadata.status)
   end)
 
   it("revalidates the selected device before starting setup", function()

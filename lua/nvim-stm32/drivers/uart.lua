@@ -2,6 +2,11 @@ local model = require("nvim-stm32.model")
 
 local M = {}
 
+M.SETUP_FAILURE_CODE = 125
+
+local DARWIN_STREAM_SCRIPT =
+  'exec 3<>"$1" || exit 125; stty "$2" raw -echo cs8 -parenb -cstopb clocal <&3 || exit 125; exec cat <&3'
+
 local function monitor_error(code, message)
   return model.error({
     code = code,
@@ -19,12 +24,23 @@ function M.commands(device, baud, platform)
     return nil, monitor_error("monitor-baud-invalid", "baud must be a positive integer")
   end
 
-  local device_flag
   if platform == "Darwin" then
-    device_flag = "-f"
-  elseif platform == "Linux" then
-    device_flag = "-F"
-  else
+    return {
+      model.command({
+        argv = {
+          "sh",
+          "-c",
+          DARWIN_STREAM_SCRIPT,
+          "nvim-stm32-uart",
+          device,
+          tostring(baud),
+        },
+        lifecycle = "stream",
+      }),
+    }
+  end
+
+  if platform ~= "Linux" then
     return nil,
       monitor_error(
         "monitor-platform-unsupported",
@@ -36,7 +52,7 @@ function M.commands(device, baud, platform)
     model.command({
       argv = {
         "stty",
-        device_flag,
+        "-F",
         device,
         tostring(baud),
         "raw",
