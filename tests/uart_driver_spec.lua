@@ -1,30 +1,26 @@
 local uart = require("nvim-stm32.drivers.uart")
 
 describe("nvim-stm32 UART driver commands", function()
-  it("builds exact Darwin setup and stream argv without shell syntax", function()
+  it("opens, configures, and streams Darwin UARTs through one descriptor", function()
     local commands = assert(uart.commands("/dev/cu.usb modem", 115200, "Darwin"))
 
     assert.same({
       {
         argv = {
-          "stty",
-          "-f",
+          "sh",
+          "-c",
+          'exec 3<>"$1" || exit 125; stty "$2" raw -echo cs8 -parenb -cstopb clocal <&3 || exit 125; exec cat <&3',
+          "nvim-stm32-uart",
           "/dev/cu.usb modem",
           "115200",
-          "raw",
-          "-echo",
-          "cs8",
-          "-parenb",
-          "-cstopb",
-          "clocal",
         },
-        timeout_ms = 5000,
-      },
-      {
-        argv = { "cat", "/dev/cu.usb modem" },
         lifecycle = "stream",
       },
     }, commands)
+  end)
+
+  it("reserves a distinct Darwin setup failure status", function()
+    assert.equals(125, uart.SETUP_FAILURE_CODE)
   end)
 
   it("uses Linux stty -F and keeps the stream unbounded", function()
