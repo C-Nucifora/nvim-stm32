@@ -30,6 +30,7 @@ M.flash_backends = { "cubeprogrammer", "stlink", "openocd" }
 
 ---@class Stm32FloatConfig
 ---@field border string            Border style for the output float.
+---@field close_on_success boolean  Close successful output automatically.
 ---@field close_on_success_ms integer  Delay before closing after a clean exit.
 
 ---@type Stm32Config
@@ -54,6 +55,7 @@ M.defaults = {
 
   float = {
     border = "rounded",
+    close_on_success = false,
     close_on_success_ms = 1500,
   },
 }
@@ -109,6 +111,7 @@ function M.resolve(opts)
   vim.validate("compiler_nvim", cfg.compiler_nvim, "boolean")
   vim.validate("float", cfg.float, "table")
   vim.validate("float.border", cfg.float.border, "string")
+  vim.validate("float.close_on_success", cfg.float.close_on_success, "boolean")
   vim.validate("float.close_on_success_ms", cfg.float.close_on_success_ms, "number")
 
   for _, key in ipairs(PATH_KEYS) do

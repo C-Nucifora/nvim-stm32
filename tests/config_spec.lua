@@ -8,6 +8,7 @@ describe("nvim-stm32.config", function()
     assert.same({ "cubeprogrammer", "stlink", "openocd" }, cfg.flash_order)
     assert.equals(115200, cfg.monitor.baud)
     assert.is_true(cfg.compiler_nvim)
+    assert.is_false(cfg.float.close_on_success)
   end)
 
   it("merges user opts over the defaults", function()
@@ -22,7 +23,7 @@ describe("nvim-stm32.config", function()
     local cfg = config.resolve({ monitor = { baud = 9600 } })
     assert.equals(9600, cfg.monitor.baud)
     assert.is_nil(cfg.monitor.device)
-    -- float has two non-nil defaults; deep merge must preserve close_on_success_ms
+    -- Preserve the remaining float defaults when changing the border.
     local cfg2 = config.resolve({ float = { border = "single" } })
     assert.equals("single", cfg2.float.border)
     assert.equals(1500, cfg2.float.close_on_success_ms)
@@ -50,6 +51,12 @@ describe("nvim-stm32.config", function()
         config.resolve({ monitor = { baud = baud } })
       end)
     end
+  end)
+
+  it("requires a boolean auto-close flag", function()
+    assert.has_error(function()
+      config.resolve({ float = { close_on_success = "yes" } })
+    end)
   end)
 
   it("rejects an unknown flash backend", function()

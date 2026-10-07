@@ -170,6 +170,82 @@ describe("nvim-stm32 fake programmer integration", function()
     assert.same({ { programmer, "-l", "st-link-only" } }, argv_logs(root))
   end)
 
+  it("inspects a board without a build or hardware mutation", function()
+    local source_project = project(root)
+    local result
+    local handle = require("nvim-stm32").board_info({
+      project = source_project,
+      backend = "cubeprogrammer",
+      programmer_path = programmer,
+      probe = { backend = "cubeprogrammer", serial = "FAKE-F429-001" },
+      env = fake_env(root),
+    }, function(value)
+      result = value
+    end)
+    assert.is_true(vim.wait(3000, function()
+      return result ~= nil
+    end))
+    assert.is_true(result.ok, vim.inspect(result))
+    assert.equals("completed", handle.state())
+    assert.equals(0x419, result.metadata.board.device_id)
+    assert.equals("FAKE-F429-001", result.metadata.board.serial)
+    assert.equals("cubeprogrammer", result.metadata.board.backend)
+    assert.equals("match", result.metadata.board.target_match)
+    assert.same({ "cubeprogrammer:identify" }, events(root))
+    assert.equals(0, #result.artifacts)
+  end)
+
+  it("refuses to inspect a probe owned by another operation", function()
+    local source_project = project(root)
+    local release = assert(require("nvim-stm32.locks").acquire("active-flash", {
+      { kind = "probe", id = "FAKE-F429-001" },
+    }))
+    local result
+    local ok, err = pcall(function()
+      require("nvim-stm32").board_info({
+        project = source_project,
+        backend = "cubeprogrammer",
+        programmer_path = programmer,
+        probe_serial = "FAKE-F429-001",
+        env = fake_env(root),
+      }, function(value)
+        result = value
+      end)
+      assert.is_false(result.ok)
+      assert.equals("operation-lock-contended", result.error.code)
+      assert.same({}, events(root))
+    end)
+    release()
+    assert.is_true(ok, err)
+  end)
+
+  it("reports a mismatched board without hiding its identity", function()
+    local source_project = project(root)
+    source_project.images[1].target.debug_ids = { 0x413 }
+    local result = run_flash("board_info", source_project, {
+      backend = "cubeprogrammer",
+      programmer_path = programmer,
+      probe_serial = "FAKE-F429-001",
+    }, { env = fake_env(root) })
+    assert.is_true(result.ok, vim.inspect(result))
+    assert.equals("mismatch", result.metadata.board.target_match)
+    assert.equals(0x419, result.metadata.board.device_id)
+    assert.same({ "cubeprogrammer:identify" }, events(root))
+  end)
+
+  it("reports unknown compatibility for an unsupported project target", function()
+    local source_project = project(root)
+    source_project.images[1].target = { mcu = "STM32UNKNOWN" }
+    local result = run_flash("board_info", source_project, {
+      backend = "cubeprogrammer",
+      programmer_path = programmer,
+      probe_serial = "FAKE-F429-001",
+    }, { env = fake_env(root) })
+    assert.is_true(result.ok, vim.inspect(result))
+    assert.equals("unknown", result.metadata.board.target_match)
+    assert.same({ "cubeprogrammer:identify" }, events(root))
+  end)
+
   it("accepts F429 identity output and runs a requested reset", function()
     local source_project = project(root)
     local result = run_flash("reset", source_project, {
@@ -262,6 +338,26 @@ describe("nvim-stm32 alternative fake backend integration", function()
     session.clear()
     vim.fn.delete(root, "rf")
   end)
+
+  for _, backend in ipairs({ "stlink", "openocd" }) do
+    it("inspects a board through " .. backend .. " without changing it", function()
+      local opts = { backend = backend, probe_serial = "FAKE-F429-001" }
+      if backend == "stlink" then
+        opts.probe_serial = "FAKEF429001"
+        opts.stlink_path = root .. "/tools/st-flash"
+        link(fixtures .. "/fake_st_flash.sh", opts.stlink_path)
+        link(fixtures .. "/fake_st_flash.sh", root .. "/tools/st-info")
+      else
+        opts.openocd_path = fixtures .. "/fake_openocd.sh"
+      end
+      local result =
+        run_flash("board_info", project(root), opts, { env = fake_env(root) })
+      assert.is_true(result.ok, vim.inspect(result))
+      assert.equals("match", result.metadata.board.target_match)
+      assert.equals(backend, result.metadata.board.backend)
+      assert.same({ backend .. ":identify" }, events(root))
+    end)
+  end
 
   it("programs and verifies a BIN with the pinned stlink tools", function()
     local stlink = root .. "/tools/st-flash"

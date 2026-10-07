@@ -263,6 +263,7 @@ describe("nvim-stm32 build lifecycle", function()
       "flash",
       "erase",
       "reset",
+      "board_info",
       "monitor",
     }, completion())
   end)

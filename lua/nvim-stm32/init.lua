@@ -59,7 +59,7 @@ local function operation_module(kind)
   if kind == "analyze" then
     return require("nvim-stm32.operations.analyze")
   end
-  if kind == "flash" or kind == "erase" or kind == "reset" then
+  if kind == "flash" or kind == "erase" or kind == "reset" or kind == "board_info" then
     return require("nvim-stm32.operations.flash")
   end
   if kind == "monitor" then
@@ -71,7 +71,7 @@ local function operation_module(kind)
         code = "operation-kind-unsupported",
         message = "nvim-stm32: unsupported operation kind " .. tostring(kind),
         operation = tostring(kind),
-        hint = "use build, analyze, flash, erase, reset, or monitor",
+        hint = "use build, analyze, flash, erase, reset, board_info, or monitor",
       })
   end
 end
@@ -102,7 +102,7 @@ function M.plan(kind, opts)
   end
   local resolved = vim.tbl_deep_extend("force", M.get_config(), opts)
   resolved.configuration = opts.configuration or opts.preset or resolved.preset
-  if kind == "flash" or kind == "erase" or kind == "reset" then
+  if kind == "flash" or kind == "erase" or kind == "reset" or kind == "board_info" then
     resolved.allow_target_mismatch = allow_target_mismatch
     return operations.plan(kind, project, resolved)
   end
@@ -115,7 +115,7 @@ end
 ---@param callback? function
 ---@return table|nil, table|nil
 function M.run(kind, opts, callback)
-  if kind == "flash" or kind == "erase" or kind == "reset" then
+  if kind == "flash" or kind == "erase" or kind == "reset" or kind == "board_info" then
     return require("nvim-stm32.operations.flash").current(kind, opts, callback)
   end
   local plan, plan_err = M.plan(kind, opts)
@@ -123,6 +123,15 @@ function M.run(kind, opts, callback)
     return nil, plan_err
   end
   return require("nvim-stm32.operation").run(plan, opts, callback)
+end
+
+--- Inspect the selected connected target without building or programming it.
+--- The result.metadata.board table includes observed identity and target_match.
+---@param opts? table
+---@param callback? fun(result: table)
+---@return table handle
+function M.board_info(opts, callback)
+  return M.run("board_info", opts, callback)
 end
 
 return M

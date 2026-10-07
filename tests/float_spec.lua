@@ -2,10 +2,11 @@ local float = require("nvim-stm32.ui.float")
 
 local target = { mcu = "STM32F429ZITx", family = "STM32F4" }
 
-local function config(delay)
+local function config(delay, close)
   return {
     float = {
       border = "rounded",
+      close_on_success = close == true,
       close_on_success_ms = delay or 0,
     },
   }
@@ -80,7 +81,7 @@ describe("nvim-stm32.ui.float", function()
   end)
 
   it("closes successful output after the configured delay", function()
-    local presenter = float.open(target, config(0))
+    local presenter = float.open(target, config(0, true))
     presenters[#presenters + 1] = presenter
 
     presenter:finish(true)
@@ -88,6 +89,21 @@ describe("nvim-stm32.ui.float", function()
     assert.is_true(vim.wait(100, function()
       return not vim.api.nvim_win_is_valid(presenter.win)
     end))
+  end)
+
+  it("keeps successful output visible by default", function()
+    local presenter = float.open(target, require("nvim-stm32.config").resolve())
+    presenters[#presenters + 1] = presenter
+    presenter:append("build complete")
+    presenter:finish(true)
+    vim.wait(1600, function()
+      return not vim.api.nvim_win_is_valid(presenter.win)
+    end)
+    assert.is_true(vim.api.nvim_win_is_valid(presenter.win))
+    assert.same(
+      { "build complete" },
+      vim.api.nvim_buf_get_lines(presenter.buf, 0, -1, false)
+    )
   end)
 
   it("keeps successful output open when auto-close is disabled", function()
@@ -116,7 +132,7 @@ describe("nvim-stm32.ui.float", function()
 
   it("does not call on_close when success closes the native window", function()
     local closes = 0
-    local presenter = float.open(target, config(0), function()
+    local presenter = float.open(target, config(0, true), function()
       closes = closes + 1
     end)
     presenters[#presenters + 1] = presenter

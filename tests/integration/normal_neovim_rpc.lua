@@ -100,9 +100,50 @@ local function run_gate()
     local state = require("nvim-stm32").get_session(root)
     return state.last_result and state.last_result.ok
   end, "build did not record a successful result")
+  vim.wait(100, function()
+    return false
+  end)
+  check(vim.api.nvim_win_is_valid(build_win), "default build output window closed")
+  vim.api.nvim_win_close(build_win, true)
+
+  vim.fn.writefile({}, fake_root .. "/events")
+  edit_source(root)
+  vim.cmd("STM32BoardInfo")
+  local board_win, board_buf = window_for_filetype("nvim-stm32-output")
+  check(board_win, "board inspection did not open an output window")
   wait_for(function()
-    return not vim.api.nvim_win_is_valid(build_win)
-  end, "successful build output window did not close")
+    return buffer_text(board_buf):find("Device ID matches the project", 1, true) ~= nil
+  end, "board inspection omitted the target match")
+  local board_text = buffer_text(board_buf)
+  check(
+    board_text:find("Probe serial: FAKE-F429-001", 1, true),
+    "board report omitted serial"
+  )
+  check(board_text:find("Device ID: 0x419", 1, true), "board report omitted identity")
+  check(
+    board_text:find("Target voltage: 3.300 V", 1, true),
+    "board report omitted voltage"
+  )
+  check(
+    vim.deep_equal(read_lines(fake_root .. "/events"), { "cubeprogrammer:identify" }),
+    "board inspection spawned a mutating command"
+  )
+  vim.wait(100, function()
+    return false
+  end)
+  check(vim.api.nvim_win_is_valid(board_win), "default board output window closed")
+  vim.api.nvim_win_close(board_win, true)
+
+  local config = vim.deepcopy(runtime.get_config())
+  config.float.close_on_success = true
+  runtime.setup(config)
+  edit_source(root)
+  vim.cmd("STM32Build")
+  local closing_build_win = window_for_filetype("nvim-stm32-output")
+  check(closing_build_win, "auto-close build did not open a window")
+  wait_for(function()
+    return not vim.api.nvim_win_is_valid(closing_build_win)
+  end, "auto-close flag did not close successful build output")
 
   edit_source(root)
   vim.cmd("STM32Analyze")
@@ -153,6 +194,8 @@ local function run_gate()
   )
   check(#read_lines(fake_root .. "/events") == 0, "plan spawned an external process")
 
+  config.float.close_on_success = false
+  runtime.setup(config)
   edit_source(root)
   vim.cmd("STM32Flash")
   local flash_win = window_for_filetype("nvim-stm32-output")
@@ -161,9 +204,11 @@ local function run_gate()
     local seen = read_lines(fake_root .. "/events")
     return seen[#seen] == "cubeprogrammer:reset"
   end, "flash did not reach its final reset")
-  wait_for(function()
-    return not vim.api.nvim_win_is_valid(flash_win)
-  end, "successful flash output window did not close")
+  vim.wait(100, function()
+    return false
+  end)
+  check(vim.api.nvim_win_is_valid(flash_win), "default flash output window closed")
+  vim.api.nvim_win_close(flash_win, true)
   check(
     vim.deep_equal(read_lines(fake_root .. "/events"), {
       "cmake:configure",
@@ -229,6 +274,9 @@ local function run_gate()
     info = true,
     probe_selection = true,
     build_window = true,
+    persistent_default_output = true,
+    board_info_read_only = true,
+    opt_in_auto_close = true,
     analysis_matches_size = true,
     plan_zero_spawn = true,
     flash_order = true,

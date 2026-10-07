@@ -58,7 +58,13 @@ local function expected_target(images, action)
     target.debug_ids = target.debug_ids or target_facts.debug_ids
     target.debug_idcode_address = target.debug_idcode_address
       or target_facts.debug_idcode_address
-    if type(target.debug_ids) ~= "table" or #target.debug_ids == 0 then
+    if action == "board_info" and target.debug_ids == nil then
+      target.debug_ids = {}
+    end
+    if
+      type(target.debug_ids) ~= "table"
+      or #target.debug_ids == 0 and action ~= "board_info"
+    then
       return nil,
         flash_error(
           "target-identity-unsupported",
@@ -141,7 +147,12 @@ end
 
 function M.plan(action, project, opts)
   opts = vim.deepcopy(opts or {})
-  if action ~= "flash" and action ~= "erase" and action ~= "reset" then
+  if
+    action ~= "flash"
+    and action ~= "erase"
+    and action ~= "reset"
+    and action ~= "board_info"
+  then
     return nil,
       flash_error(
         "flash-action-invalid",
@@ -276,7 +287,7 @@ function M.plan(action, project, opts)
       return nil, erase_err
     end
     append(commands, steps, erase, { phase = "erase", image_id = nil })
-  else
+  elseif action == "reset" then
     local reset, reset_err =
       command(driver, "reset_command", tool_paths.program, probe, action)
     if not reset then
@@ -433,7 +444,7 @@ local function expected_commands(plan, driver)
   elseif plan.kind == "erase" then
     commands[#commands + 1] =
       driver.erase_command(plan.metadata.tools.program, plan.metadata.probe)
-  else
+  elseif plan.kind == "reset" then
     commands[#commands + 1] =
       driver.reset_command(plan.metadata.tools.program, plan.metadata.probe)
   end
@@ -453,7 +464,7 @@ local function expected_steps(plan)
     steps[#steps + 1] = { phase = "reset", image_id = nil }
   elseif plan.kind == "erase" then
     steps[#steps + 1] = { phase = "erase", image_id = nil }
-  else
+  elseif plan.kind == "reset" then
     steps[#steps + 1] = { phase = "reset", image_id = nil }
   end
   return steps
@@ -723,7 +734,8 @@ function M.after_command(plan, command_result, command_index)
       return nil, decorated_error(identity_err, plan, step, command_result)
     end
     if
-      not accepted_identity(plan.metadata.target, identity)
+      plan.kind ~= "board_info"
+      and not accepted_identity(plan.metadata.target, identity)
       and not plan.metadata.allow_target_mismatch
     then
       return nil,
@@ -740,6 +752,18 @@ function M.after_command(plan, command_result, command_index)
           step,
           command_result
         )
+    end
+    if plan.kind == "board_info" then
+      local board = vim.deepcopy(identity)
+      board.serial = plan.metadata.probe.serial
+      board.backend = plan.metadata.backend
+      board.firmware = plan.metadata.probe.firmware
+      board.expected_mcu = plan.metadata.target.mcu
+      board.expected_device_ids = vim.deepcopy(plan.metadata.target.debug_ids)
+      board.target_match = #board.expected_device_ids == 0 and "unknown"
+        or accepted_identity(plan.metadata.target, identity) and "match"
+        or "mismatch"
+      plan.metadata.board = board
     end
   elseif
     step.phase == "program-verify" and type(driver.parse_program) == "function"
@@ -771,7 +795,11 @@ function M.complete(plan, process_result)
       or nil,
     started_ns = process_result.started_ns,
     finished_ns = process_result.ended_ns,
-    metadata = { operation_id = plan.id, backend = plan.metadata.backend },
+    metadata = {
+      operation_id = plan.id,
+      backend = plan.metadata.backend,
+      board = plan.metadata.board,
+    },
   })
 end
 

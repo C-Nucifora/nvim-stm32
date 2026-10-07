@@ -47,10 +47,15 @@ require("nvim-stm32").setup({
   compiler_nvim = true,
   float = {
     border = "rounded",
-    close_on_success_ms = 1500,
+    close_on_success = false, -- retain completed output until you close it
+    close_on_success_ms = 1500, -- used when close_on_success is true
   },
 })
 ```
+
+Build and hardware output windows stay open by default. Set
+`float.close_on_success = true` to close successful output after
+`float.close_on_success_ms`. Failed output always stays open.
 
 An operation-local backend takes precedence over `flash_backend`. A configured
 backend stays pinned: an unavailable tool or failed command is returned to the
@@ -101,10 +106,14 @@ an ELF with a glob or reuse an unrelated build.
 - `:STM32Erase` asks for confirmation immediately before it identifies the
   target and issues a mass erase. Declining starts no process. This repeated
   confirmation is behavior of the `:STM32Erase` UI command.
+- `:STM32BoardInfo` connects through the selected probe and reports its serial,
+  backend, device ID, device name and voltage when the backend supplies them.
+  It compares the observed ID with the project target without building,
+  programming, erasing or resetting the device. Run `:STM32SelectProbe` first.
 - `:STM32Reset` identifies the selected target and resets it.
 - `:STM32Monitor` configures and streams the selected UART device. Closing its
   output window cancels only the monitor process owned by that operation.
-- `:STM32Plan {build|clean|rebuild|analyze|flash|erase|reset|monitor}` displays
+- `:STM32Plan {build|clean|rebuild|analyze|flash|erase|reset|board_info|monitor}` displays
   the project, configuration, images, backend, probe, artifacts, phases, working
   directory, and escaped argv without starting a process. Erase plans are
   previews and cannot be executed.
@@ -113,6 +122,24 @@ On macOS the UART default scan is `/dev/cu.usbmodem*`; on Linux it is
 `/dev/ttyACM*`. Set `monitor.device` to skip discovery. If several devices are
 present, `:STM32Monitor` asks which one to use and remembers it for the project.
 The default baud is 115200 with raw, 8-bit, no-parity, one-stop-bit settings.
+
+Use the same inspection from Lua:
+
+```lua
+require("nvim-stm32").board_info({}, function(result)
+  if result.ok then
+    vim.print(result.metadata.board)
+  else
+    vim.notify(result.error.message, vim.log.levels.ERROR)
+  end
+end)
+```
+
+`result.metadata.board.target_match` is `"match"`, `"mismatch"`, or `"unknown"`.
+A device ID can cover several MCU variants and boards, so a match confirms only
+that ID. Inspection does not validate build artifacts, flash layout or wiring.
+OpenOCD needs a known project target profile to read the ID; missing device
+names or voltage are shown as `not reported`.
 
 ## Hardware safety
 

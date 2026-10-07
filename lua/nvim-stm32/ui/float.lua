@@ -114,7 +114,8 @@ function M.open(target, config, options, on_close)
     buf = buf,
     partial = "",
     empty = true,
-    close_on_success = options.close_on_success ~= false,
+    close_on_success = options.close_on_success == true
+      or options.close_on_success == nil and config.float.close_on_success == true,
     close_on_success_ms = config.float.close_on_success_ms,
   }, Presenter)
 

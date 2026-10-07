@@ -1,4 +1,5 @@
-local commands = { "STM32Flash", "STM32Erase", "STM32Reset", "STM32Plan" }
+local commands =
+  { "STM32Flash", "STM32Erase", "STM32Reset", "STM32BoardInfo", "STM32Plan" }
 
 describe("nvim-stm32 hardware operation commands", function()
   before_each(function()
@@ -16,6 +17,7 @@ describe("nvim-stm32 hardware operation commands", function()
     assert.equals(2, vim.fn.exists(":STM32Flash"))
     assert.equals(2, vim.fn.exists(":STM32Erase"))
     assert.equals(2, vim.fn.exists(":STM32Reset"))
+    assert.equals(2, vim.fn.exists(":STM32BoardInfo"))
     assert.equals(0, vim.fn.exists(":STM32Verify"))
 
     local completion = vim.api.nvim_get_commands({ builtin = false }).STM32Plan.complete
@@ -27,6 +29,7 @@ describe("nvim-stm32 hardware operation commands", function()
       "flash",
       "erase",
       "reset",
+      "board_info",
       "monitor",
     }, completion())
   end)
@@ -242,7 +245,8 @@ describe("nvim-stm32 hardware operation output", function()
     assert.is_false(presenter.finished)
     assert.matches("reset", opened.options.title, 1, true)
     assert.matches("STM32F429ZITx", opened.options.title, 1, true)
-    assert.is_true(opened.options.close_on_success)
+    assert.is_nil(opened.options.close_on_success)
+    assert.is_false(opened.config.float.close_on_success)
   end)
 
   it("cancels only the operation handle when its window closes", function()

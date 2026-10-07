@@ -48,7 +48,6 @@ function M.current(action, opts, callback)
   local saw_output = false
   presenter = require("nvim-stm32.ui.float").open(target, config, {
     title = " nvim-stm32 " .. action .. ": " .. target_label(project) .. " ",
-    close_on_success = true,
   }, function()
     if handle then
       handle.cancel("window-closed")
@@ -64,6 +63,16 @@ function M.current(action, opts, callback)
     end
   end
   handle = runtime.run(action, opts, function(result)
+    if result.ok and action == "board_info" then
+      presenter:append(
+        "\n"
+          .. table.concat(
+            require("nvim-stm32.ui.board").lines(result.metadata.board),
+            "\n"
+          )
+          .. "\n"
+      )
+    end
     if not result.ok then
       local had_output = saw_output
       if not saw_output then
