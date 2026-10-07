@@ -47,6 +47,7 @@ function M.current(action, opts, callback)
   local handle
   local saw_output = false
   presenter = require("nvim-stm32.ui.float").open(target, config, {
+    project_root = project.root,
     title = " nvim-stm32 " .. action .. ": " .. target_label(project) .. " ",
   }, function()
     if handle then

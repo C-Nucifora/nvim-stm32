@@ -406,7 +406,7 @@ local function run_planned(project, plan, opts, callback)
   local target = project.images[1].target or {}
   local presenter
   local handle
-  presenter = float.open(target, opts, function()
+  presenter = float.open(target, opts, { project_root = project.root }, function()
     if handle then
       handle.cancel("window-closed")
     end

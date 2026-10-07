@@ -38,6 +38,7 @@ describe("nvim-stm32.ui.float", function()
 
     assert.is_true(vim.api.nvim_buf_is_valid(presenter.buf))
     assert.is_true(vim.api.nvim_win_is_valid(presenter.win))
+    assert.equals(presenter.win, vim.api.nvim_get_current_win())
     assert.matches(
       "STM32F429ZITx",
       vim.inspect(vim.api.nvim_win_get_config(presenter.win).title),
@@ -49,6 +50,54 @@ describe("nvim-stm32.ui.float", function()
     presenter:append("ding\n")
     assert.same(
       { "configuring", "building" },
+      vim.api.nvim_buf_get_lines(presenter.buf, 0, -1, false)
+    )
+  end)
+
+  it("removes CubeProgrammer colors even when escape sequences cross chunks", function()
+    local presenter = float.open(target, config())
+    presenters[#presenters + 1] = presenter
+    local output = "\27[39;49m\27[32mDevice ID : 0x419\27[0m\r\n"
+      .. "\27[1;33mDownload verified successfully\27[0m\n"
+    for index = 1, #output do
+      presenter:append(output:sub(index, index))
+    end
+    presenter:finish(true)
+    assert.same(
+      { "Device ID : 0x419", "Download verified successfully" },
+      vim.api.nvim_buf_get_lines(presenter.buf, 0, -1, false)
+    )
+  end)
+
+  it("separates progress redraws and joins split CRLF", function()
+    local presenter = float.open(target, config())
+    presenters[#presenters + 1] = presenter
+    presenter:append("Download 10%\rDownload 50%\r")
+    presenter:append("Download 100%\r")
+    presenter:append("\nVerified\r")
+    presenter:append("\nReset complete")
+    presenter:finish(true)
+    assert.same({
+      "Download 10%",
+      "Download 50%",
+      "Download 100%",
+      "Verified",
+      "Reset complete",
+    }, vim.api.nvim_buf_get_lines(presenter.buf, 0, -1, false))
+  end)
+
+  it("removes split terminal titles and unfinished control sequences", function()
+    local presenter = float.open(target, config())
+    presenters[#presenters + 1] = presenter
+    local output = "\27]0;STM32 programmer\7Connected\n"
+      .. "\27]2;Programming\27\\Target\27[K ready\n"
+      .. "last line\27[39;"
+    for index = 1, #output do
+      presenter:append(output:sub(index, index))
+    end
+    presenter:finish(false)
+    assert.same(
+      { "Connected", "Target ready", "last line" },
       vim.api.nvim_buf_get_lines(presenter.buf, 0, -1, false)
     )
   end)
@@ -153,7 +202,7 @@ describe("nvim-stm32.ui.float", function()
         recorded = opts
         snack_window = {
           show = function(self)
-            self.win = vim.api.nvim_open_win(opts.buf, false, {
+            self.win = vim.api.nvim_open_win(opts.buf, opts.enter == true, {
               relative = "editor",
               row = 0,
               col = 0,
@@ -182,6 +231,7 @@ describe("nvim-stm32.ui.float", function()
     assert.equals(snack_window, presenter.snacks)
     assert.equals(snack_window.win, presenter.win)
     assert.is_true(vim.api.nvim_win_is_valid(presenter.win))
+    assert.equals(presenter.win, vim.api.nvim_get_current_win())
   end)
 
   it("calls on_close once for a user-closed snacks window", function()

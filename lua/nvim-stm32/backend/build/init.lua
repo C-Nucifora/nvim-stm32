@@ -174,7 +174,7 @@ function M.run(target, opts, callback)
   end
 
   M.last_result = nil
-  local presenter = float.open(target, config)
+  local presenter = float.open(target, config, { project_root = target.root })
   process.run(commands, {
     cwd = target.root,
     env = tools.env(config),

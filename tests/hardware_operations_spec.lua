@@ -195,6 +195,52 @@ describe("nvim-stm32 fake programmer integration", function()
     assert.equals(0, #result.artifacts)
   end)
 
+  it(
+    "keeps an explicitly requested board project while another firmware buffer is current",
+    function()
+      local source_project = project(root)
+      local original_buf = vim.api.nvim_get_current_buf()
+      local source_buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_name(
+        source_buf,
+        repo .. "/tests/fixtures/nucleo_cmake/Core/Src/main.c"
+      )
+      vim.api.nvim_set_current_buf(source_buf)
+      local result
+      local presenter_win
+      local presenter_buf
+      local ok, err = pcall(function()
+        require("nvim-stm32.ui.operation").current("board_info", {
+          project = source_project,
+          backend = "cubeprogrammer",
+          programmer_path = programmer,
+          probe_serial = "FAKE-F429-001",
+          env = fake_env(root),
+        }, function(value)
+          result = value
+        end)
+        presenter_win = vim.api.nvim_get_current_win()
+        presenter_buf = vim.api.nvim_get_current_buf()
+        assert.is_true(vim.wait(3000, function()
+          return result ~= nil
+        end))
+        assert.is_true(result.ok, vim.inspect(result))
+        assert.equals(root, assert(require("nvim-stm32").resolve_project()).root)
+      end)
+      if presenter_win and vim.api.nvim_win_is_valid(presenter_win) then
+        vim.api.nvim_win_close(presenter_win, true)
+      end
+      if presenter_buf and vim.api.nvim_buf_is_valid(presenter_buf) then
+        vim.api.nvim_buf_delete(presenter_buf, { force = true })
+      end
+      vim.api.nvim_set_current_buf(original_buf)
+      if vim.api.nvim_buf_is_valid(source_buf) then
+        vim.api.nvim_buf_delete(source_buf, { force = true })
+      end
+      assert.is_true(ok, err)
+    end
+  )
+
   it("refuses to inspect a probe owned by another operation", function()
     local source_project = project(root)
     local release = assert(require("nvim-stm32.locks").acquire("active-flash", {

@@ -41,6 +41,7 @@ function M.current(opts, callback)
     local saw_output = false
     local last_byte
     presenter = require("nvim-stm32.ui.float").open(target(project), resolved, {
+      project_root = project.root,
       title = " nvim-stm32 monitor: " .. plan.metadata.device .. " ",
       close_on_success = false,
     }, function()

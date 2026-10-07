@@ -7,19 +7,30 @@ M.markers = {
   { file = "Makefile", backend = "make" },
 }
 
-local function buffer_name(bufnr)
-  local name = vim.api.nvim_buf_get_name(bufnr)
-  if name:match("^health://") then
+local function source_buffer(bufnr)
+  if bufnr == nil or bufnr == 0 then
+    bufnr = vim.api.nvim_get_current_buf()
+  end
+  if vim.api.nvim_buf_get_name(bufnr):match("^health://") then
     local previous = vim.fn.bufnr("#")
-    if previous > 0 then
-      name = vim.api.nvim_buf_get_name(previous)
+    if previous > 0 and vim.api.nvim_buf_is_valid(previous) then
+      return previous
     end
   end
-  return name
+  return bufnr
+end
+
+function M.buffer_context(bufnr)
+  return vim.b[source_buffer(bufnr)].nvim_stm32_context
 end
 
 function M.start_dir(bufnr)
-  local name = buffer_name(bufnr or 0)
+  local source = source_buffer(bufnr)
+  local context = M.buffer_context(source)
+  if context then
+    return context.dir
+  end
+  local name = vim.api.nvim_buf_get_name(source)
   if name ~= "" and vim.uv.fs_stat(name) then
     return vim.fs.dirname(name)
   end
@@ -74,14 +85,21 @@ local function walk_candidates(dir)
 end
 
 function M.find(dir)
+  local context = dir == nil and M.buffer_context() or nil
   local candidates = walk_candidates(vim.fs.normalize(dir or M.start_dir()))
   for _, candidate in ipairs(candidates) do
     if candidate.strong then
+      if context and candidate.root ~= context.root then
+        return nil, nil, nil
+      end
       return candidate.root, candidate.adapter, candidate.marker
     end
   end
   local candidate = candidates[1]
   if candidate then
+    if context and candidate.root ~= context.root then
+      return nil, nil, nil
+    end
     return candidate.root, candidate.adapter, candidate.marker
   end
   return nil, nil, nil

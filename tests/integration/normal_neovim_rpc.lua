@@ -96,6 +96,10 @@ local function run_gate()
   vim.cmd("STM32Build")
   local build_win = window_for_filetype("nvim-stm32-output")
   check(build_win, "build did not open an output window")
+  check(
+    vim.api.nvim_get_current_win() == build_win,
+    "build output window was not focused"
+  )
   wait_for(function()
     local state = require("nvim-stm32").get_session(root)
     return state.last_result and state.last_result.ok
@@ -104,13 +108,24 @@ local function run_gate()
     return false
   end)
   check(vim.api.nvim_win_is_valid(build_win), "default build output window closed")
-  vim.api.nvim_win_close(build_win, true)
-
+  vim.cmd.cd(vim.fn.fnameescape(fake_root))
+  local before_info = #notifications
+  vim.cmd("STM32Info")
+  check(#notifications == before_info + 1, "focused output info did not report")
+  check(
+    notifications[#notifications]:find(root, 1, true),
+    "focused output lost the source project"
+  )
   vim.fn.writefile({}, fake_root .. "/events")
-  edit_source(root)
   vim.cmd("STM32BoardInfo")
-  local board_win, board_buf = window_for_filetype("nvim-stm32-output")
+  local board_win = vim.api.nvim_get_current_win()
+  local board_buf = vim.api.nvim_win_get_buf(board_win)
+  check(board_win ~= build_win, "board inspection did not open its own window")
   check(board_win, "board inspection did not open an output window")
+  check(
+    vim.api.nvim_get_current_win() == board_win,
+    "board output window was not focused"
+  )
   wait_for(function()
     return buffer_text(board_buf):find("Device ID matches the project", 1, true) ~= nil
   end, "board inspection omitted the target match")
@@ -133,6 +148,8 @@ local function run_gate()
   end)
   check(vim.api.nvim_win_is_valid(board_win), "default board output window closed")
   vim.api.nvim_win_close(board_win, true)
+  vim.api.nvim_win_close(build_win, true)
+  vim.cmd.cd(vim.fn.fnameescape(root))
 
   local config = vim.deepcopy(runtime.get_config())
   config.float.close_on_success = true
@@ -200,6 +217,10 @@ local function run_gate()
   vim.cmd("STM32Flash")
   local flash_win = window_for_filetype("nvim-stm32-output")
   check(flash_win, "flash did not open an output window")
+  check(
+    vim.api.nvim_get_current_win() == flash_win,
+    "flash output window was not focused"
+  )
   wait_for(function()
     local seen = read_lines(fake_root .. "/events")
     return seen[#seen] == "cubeprogrammer:reset"
