@@ -62,12 +62,17 @@ local function read_cmake(path)
       mcus[#mcus + 1] = mcu
     end
   end
+  local target_hint = contents:match("add_executable%s*%(%s*([%w_%.%-]+)")
+    or contents:match("add_custom_target%s*%(%s*([%w_%.%-]+)")
+  local _, executable_count = contents:lower():gsub("add_executable%s*%(", "")
+  local build_target = executable_count == 1
+      and contents:match("add_executable%s*%(%s*([%w_%.%-]+)%f[%s)]")
+    or nil
   return mcus,
     contents:match("%-mcpu=([%w%-%.]+)"),
     contents:match("%-mfpu=([%w%-%.]+)"),
-    contents:match("add_executable%s*%(%s*([%w_%-]+)") or contents:match(
-      "add_custom_target%s*%(%s*([%w_%-]+)"
-    )
+    build_target,
+    target_hint
 end
 
 function M.read_ioc(path)
@@ -184,7 +189,7 @@ end
 local function append_cmake_signals(out, root)
   local matches = {}
   for _, path in ipairs(cmake_files(root)) do
-    local mcus, core, fpu, build_target = read_cmake(path)
+    local mcus, core, fpu, build_target, target_hint = read_cmake(path)
     for _, mcu in ipairs(mcus) do
       matches[#matches + 1] = {
         mcu = mcu,
@@ -192,6 +197,7 @@ local function append_cmake_signals(out, root)
         fpu = fpu,
         file = path,
         build_target = build_target,
+        target_hint = target_hint,
       }
     end
   end
@@ -205,7 +211,7 @@ local function append_cmake_signals(out, root)
       core = match.core,
       fpu = match.fpu,
       build_target = match.build_target,
-      image_hint = image_hint(root, match.file, match.core, match.build_target),
+      image_hint = image_hint(root, match.file, match.core, match.target_hint),
     }
   end
 end

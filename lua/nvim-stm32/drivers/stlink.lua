@@ -16,10 +16,9 @@ end
 local function serial_argument(probe)
   vim.validate("probe", probe, "table")
   required_string("probe.serial", probe.serial)
-  if probe.serial:match("^0[xX]") then
-    return "0x" .. probe.serial:sub(3)
-  end
-  return "0x" .. probe.serial
+  local serial = probe.serial:gsub("^0[xX]", "")
+  required_string("probe.serial", serial)
+  return serial
 end
 
 local function trim(value)
@@ -51,7 +50,7 @@ end
 ---@return table
 function M.list_command(tool)
   required_string("tool", tool)
-  return short_command({ tool, "--probe" })
+  return short_command({ tool, "--probe", "--hot-plug" })
 end
 
 ---@param tool string
@@ -84,6 +83,7 @@ function M.program_command(tool, request)
     tool,
     "--serial",
     serial_argument(request.probe),
+    "--hot-plug",
     "write",
     request.artifact.path,
     string.format("0x%08X", request.address),
@@ -95,7 +95,13 @@ end
 ---@return table
 function M.erase_command(tool, probe)
   required_string("tool", tool)
-  return short_command({ tool, "--serial", serial_argument(probe), "erase" })
+  return short_command({
+    tool,
+    "--serial",
+    serial_argument(probe),
+    "--hot-plug",
+    "erase",
+  })
 end
 
 ---@param tool string
@@ -103,7 +109,13 @@ end
 ---@return table
 function M.reset_command(tool, probe)
   required_string("tool", tool)
-  return short_command({ tool, "--serial", serial_argument(probe), "reset" })
+  return short_command({
+    tool,
+    "--serial",
+    serial_argument(probe),
+    "--hot-plug",
+    "reset",
+  })
 end
 
 ---@param output string

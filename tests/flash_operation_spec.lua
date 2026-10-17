@@ -121,7 +121,7 @@ describe("nvim-stm32 flash operation plans", function()
     vim.fn.delete(root, "rf")
   end)
 
-  it("plans identify, mandatory program verification, then one reset", function()
+  it("plans ELF inspection, identify, program verification, then one reset", function()
     local app = image(root, "application")
     local source = project(root, { app })
     local elf = artifact(root, "application", "elf")
@@ -134,13 +134,14 @@ describe("nvim-stm32 flash operation plans", function()
     assert.same({ kind = "project-artifacts", id = root }, plan.locks[1])
     assert.same({ kind = "probe", id = "ABC123" }, plan.locks[2])
     assert.equals("once-after-verify", plan.reset_policy)
+    assert.same(plan.metadata.elf_commands[1], plan.commands[1])
     assert.same({
       opts.programmer_path,
       "-c",
       "port=SWD",
       "mode=HOTPLUG",
       "sn=ABC123",
-    }, plan.commands[1].argv)
+    }, plan.commands[2].argv)
     assert.same({
       opts.programmer_path,
       "-c",
@@ -150,7 +151,7 @@ describe("nvim-stm32 flash operation plans", function()
       "-w",
       vim.uv.fs_realpath(elf.path),
       "-v",
-    }, plan.commands[2].argv)
+    }, plan.commands[3].argv)
     assert.same({
       opts.programmer_path,
       "-c",
@@ -158,8 +159,9 @@ describe("nvim-stm32 flash operation plans", function()
       "mode=UR",
       "sn=ABC123",
       "-rst",
-    }, plan.commands[3].argv)
+    }, plan.commands[4].argv)
     assert.same({
+      { phase = "inspect-elf", image_id = "application" },
       { phase = "identify", image_id = nil },
       {
         phase = "program-verify",
@@ -184,11 +186,36 @@ describe("nvim-stm32 flash operation plans", function()
     local plan = assert(flash.plan("flash", source, opts))
 
     assert.same({ "app", "boot" }, plan.images)
-    assert.equals("app", plan.metadata.steps[2].image_id)
-    assert.equals("boot", plan.metadata.steps[3].image_id)
-    assert.equals("reset", plan.metadata.steps[4].phase)
-    assert.equals(4, #plan.commands)
+    assert.equals("app", plan.metadata.steps[4].image_id)
+    assert.equals("boot", plan.metadata.steps[5].image_id)
+    assert.equals("reset", plan.metadata.steps[6].phase)
+    assert.equals(6, #plan.commands)
   end)
+
+  it(
+    "refuses stlink multi-image writes that would resume partially flashed firmware",
+    function()
+      local source = project(
+        root,
+        { image(root, "boot", 0x08000000), image(root, "app", 0x08100000) }
+      )
+      local stlink = executable(root, "st-flash")
+      executable(root, "st-info")
+
+      local plan, err = flash.plan("flash", source, {
+        backend = "stlink",
+        stlink_path = stlink,
+        configuration = "Debug",
+        probe_serial = "ABC123",
+        artifacts = { artifact(root, "boot", "bin"), artifact(root, "app", "bin") },
+        build_id = "build-1",
+      })
+
+      assert.is_nil(plan)
+      assert.equals("flash-backend-multi-image-unsupported", err.code)
+      assert.matches("cubeprogrammer or openocd", err.message, 1, true)
+    end
+  )
 
   it("plans reset with identity first and without artifacts or a build", function()
     local source = project(root, { image(root, "application") })
@@ -418,9 +445,16 @@ describe("nvim-stm32 flash operation execution", function()
     process.run = function(commands, opts, callback)
       local records = {}
       local combined = ""
+      local hardware_index = 0
       for index, command in ipairs(commands) do
         calls[#calls + 1] = vim.deepcopy(command.argv)
-        local item = outputs[index] or { code = 0, output = "" }
+        local item
+        if command.argv[2] == "-h" then
+          item = { code = 0, output = "" }
+        else
+          hardware_index = hardware_index + 1
+          item = outputs[hardware_index] or { code = 0, output = "" }
+        end
         combined = combined .. (item.output or "")
         records[#records + 1] = {
           argv = vim.deepcopy(command.argv),
@@ -531,12 +565,12 @@ describe("nvim-stm32 flash operation execution", function()
       result = value
     end)
 
-    assert.equals(1, #calls)
+    assert.equals(2, #calls)
     assert.is_false(result.ok)
     assert.equals("target-mismatch", result.error.code)
     assert.equals("cubeprogrammer", result.error.backend)
     assert.equals("identify", result.error.phase)
-    assert.same(plan.commands[1].argv, result.error.command)
+    assert.same(plan.commands[2].argv, result.error.command)
     assert.matches("0x413", result.error.output, 1, true)
   end)
 
@@ -559,7 +593,7 @@ describe("nvim-stm32 flash operation execution", function()
     end)
 
     assert.is_true(result.ok, vim.inspect(result))
-    assert.equals(3, #calls)
+    assert.equals(4, #calls)
   end)
 
   it("does not accept a target mismatch override from setup config", function()
@@ -693,12 +727,12 @@ describe("nvim-stm32 flash operation execution", function()
       result = value
     end)
 
-    assert.equals(2, #calls)
+    assert.equals(4, #calls)
     assert.is_false(result.ok)
     assert.equals("cubeprogrammer", result.error.backend)
     assert.equals("program-verify", result.error.phase)
     assert.equals("boot", result.error.image_id)
-    assert.same(plan.commands[2].argv, result.error.command)
+    assert.same(plan.commands[4].argv, result.error.command)
     assert.matches("verify failed", result.error.output, 1, true)
   end)
 
@@ -751,7 +785,7 @@ describe("nvim-stm32 flash operation execution", function()
     end)
 
     assert.is_true(result.ok, vim.inspect(result))
-    assert.equals(4, #calls)
+    assert.equals(6, #calls)
     local resets = vim.tbl_filter(function(argv)
       return vim.tbl_contains(argv, "-rst")
     end, calls)
@@ -802,17 +836,17 @@ printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
     vim.uv.fs_chmod(objdump_path, 493)
     local plan = assert(flash.plan("flash", source, opts))
     flash.inspect_elf_command = original_inspect_elf_command
-    local starts = 0
-    process.run = function()
-      starts = starts + 1
-    end
+    process.run = original_process_run
     local result
 
     flash.execute(plan, opts, function(value)
       result = value
     end)
 
-    assert.equals(0, starts)
+    assert.is_true(vim.wait(1000, function()
+      return result ~= nil
+    end))
+    assert.equals("inspect-elf", result.error.phase)
     assert.is_false(result.ok)
     assert.equals("flash-range-outside-region", result.error.code)
   end)
@@ -854,6 +888,52 @@ printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
     end)
 
     assert.equals(0, calls)
+    assert.is_false(result.ok)
+    assert.equals("erase-confirmation-required", result.error.code)
+  end)
+
+  it("consumes erase confirmation once across the original plan and copies", function()
+    local source = project(root, { image(root, "application") })
+    local opts = cube_opts(root)
+    opts.confirmed = true
+    local plan = assert(flash.plan("erase", source, opts))
+    local copy = vim.deepcopy(plan)
+    local calls = {}
+    fake_sequence(
+      { { output = "Device ID : 0x419\n" }, { output = "erased\n" } },
+      calls
+    )
+    local result
+    flash.execute(plan, {}, function(value)
+      result = value
+    end)
+    assert.is_true(result.ok, vim.inspect(result))
+    for _, replay in ipairs({ plan, copy }) do
+      flash.execute(replay, {}, function(value)
+        result = value
+      end)
+      assert.is_false(result.ok)
+      assert.equals("erase-confirmation-required", result.error.code)
+    end
+    assert.equals(2, #calls)
+  end)
+
+  it("does not authorize erase by changing a preview confirmation flag", function()
+    local source = project(root, { image(root, "application") })
+    local opts = cube_opts(root)
+    opts.preview = true
+    local plan = assert(flash.plan("erase", source, opts))
+    plan.metadata.preview = false
+    plan.metadata.confirmed = true
+    local calls = {}
+    fake_sequence({}, calls)
+    local result
+
+    flash.execute(plan, {}, function(value)
+      result = value
+    end)
+
+    assert.equals(0, #calls)
     assert.is_false(result.ok)
     assert.equals("erase-confirmation-required", result.error.code)
   end)

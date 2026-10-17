@@ -50,6 +50,7 @@ describe("nvim-stm32 artifact discovery", function()
   local config
   local single_image_project
   local single_target_reply
+  local original_stat = vim.uv.fs_stat
 
   before_each(function()
     root = vim.fn.tempname()
@@ -63,8 +64,84 @@ describe("nvim-stm32 artifact discovery", function()
   end)
 
   after_each(function()
+    vim.uv.fs_stat = original_stat
     vim.fn.delete(root, "rf")
   end)
+
+  for _, adapter in ipairs({ "cmake", "tree" }) do
+    local function discover()
+      if adapter == "cmake" then
+        return assert(
+          artifacts.from_cmake(
+            single_image_project,
+            config,
+            single_target_reply,
+            "build-new"
+          )
+        )
+      end
+      return assert(artifacts.from_tree(single_image_project, config, "build-new"))
+    end
+
+    it(
+      adapter .. " omits stale flash companions while retaining older linker maps",
+      function()
+        local timestamp = os.time() - 120
+        for _, extension in ipairs({ "bin", "hex", "map" }) do
+          local path = config.binary_dir .. "/app." .. extension
+          assert(vim.uv.fs_utime(path, timestamp, timestamp))
+        end
+        local elf = config.binary_dir .. "/app.elf"
+        assert(vim.uv.fs_utime(elf, timestamp + 60, timestamp + 60))
+
+        local found = discover()
+        assert.equals(2, #found)
+        assert.equals(1, #artifacts.for_image(found, "application", "elf"))
+        assert.equals(1, #artifacts.for_image(found, "application", "map"))
+        for _, artifact in ipairs(found) do
+          assert.equals("build-new", artifact.build_id)
+        end
+      end
+    )
+
+    it(adapter .. " retains equal and newer companions after no-op builds", function()
+      local timestamp = os.time() - 120
+      for _, extension in ipairs({ "elf", "bin", "hex", "map" }) do
+        local path = config.binary_dir .. "/app." .. extension
+        assert(vim.uv.fs_utime(path, timestamp, timestamp))
+      end
+      for _, offset in ipairs({ 0, 60 }) do
+        for _, extension in ipairs({ "bin", "hex" }) do
+          local path = config.binary_dir .. "/app." .. extension
+          assert(vim.uv.fs_utime(path, timestamp + offset, timestamp + offset))
+        end
+        local found = discover()
+        assert.equals(4, #found)
+        for _, artifact in ipairs(found) do
+          assert.equals("build-new", artifact.build_id)
+        end
+      end
+    end)
+
+    it(adapter .. " compares companion freshness at nanosecond precision", function()
+      local timestamp = os.time()
+      vim.uv.fs_stat = function(path, ...)
+        local stat = original_stat(path, ...)
+        if stat and vim.fs.dirname(path) == config.binary_dir then
+          stat.mtime = {
+            sec = timestamp,
+            nsec = path:match("%.elf$") and 101 or 100,
+          }
+        end
+        return stat
+      end
+
+      local found = discover()
+      assert.equals(2, #found)
+      assert.equals(0, #artifacts.for_image(found, "application", "bin"))
+      assert.equals(0, #artifacts.for_image(found, "application", "hex"))
+    end)
+  end
 
   it("maps an executable target to its image", function()
     local found = assert(

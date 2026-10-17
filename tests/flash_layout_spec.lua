@@ -432,4 +432,69 @@ describe("nvim-stm32 flash layout", function()
     assert.is_nil(resolved)
     assert.equals("flash-backend-unknown", err.code)
   end)
+
+  it("separates erase sectors even when image bytes do not overlap", function()
+    local first = image(root, "first")
+    local second = image(root, "second")
+    local artifacts =
+      { artifact(root, "first", "elf"), artifact(root, "second", "elf") }
+    for _, address in ipairs({ 0x08001000, 0x08004000 }) do
+      local resolved, err =
+        layout.resolve(context(root, { first, second }), artifacts, "openocd", {
+          sections = {
+            first = { load_section(".text", 0x08000000, 8) },
+            second = { load_section(".text", address, 8) },
+          },
+        })
+      if address == 0x08001000 then
+        assert.is_nil(resolved)
+        assert.equals("flash-erase-overlap", err.code)
+      else
+        assert.is_nil(err)
+        assert.equals(2, #resolved)
+      end
+    end
+  end)
+
+  it("includes sparse ELF section holes in the erase envelope", function()
+    local first = image(root, "first")
+    local second = image(root, "second")
+    local resolved, err = layout.resolve(
+      context(root, { first, second }),
+      { artifact(root, "first", "elf"), artifact(root, "second", "elf") },
+      "openocd",
+      {
+        sections = {
+          first = {
+            load_section(".text", 0x08000000, 8),
+            load_section(".data", 0x08008000, 8),
+          },
+          second = { load_section(".text", 0x08004000, 8) },
+        },
+      }
+    )
+
+    assert.is_nil(resolved)
+    assert.equals("flash-erase-overlap", err.code)
+  end)
+
+  it("refuses multi-image erases with unknown sector geometry", function()
+    local first = image(root, "first")
+    local second = image(root, "second")
+    second.target.mcu = "STM32H747ZITx"
+    local resolved, err = layout.resolve(
+      context(root, { first, second }),
+      { artifact(root, "first", "elf"), artifact(root, "second", "elf") },
+      "openocd",
+      {
+        sections = {
+          first = { load_section(".text", 0x08000000, 8) },
+          second = { load_section(".text", 0x08100000, 8) },
+        },
+      }
+    )
+
+    assert.is_nil(resolved)
+    assert.equals("flash-erase-geometry-unsupported", err.code)
+  end)
 end)

@@ -88,6 +88,9 @@ M.families = {
     core = "cortex-m7",
     fpu = "fpv5-d16",
     openocd_cfg = "target/stm32h7x.cfg",
+    cores = {
+      ["cortex-m4"] = { core = "cortex-m4", fpu = "fpv4-sp-d16" },
+    },
   },
   L0 = {
     family = "STM32L0",
@@ -171,6 +174,19 @@ M.observed_devices = {
   },
 }
 
+--- Coarse erase boundaries shared by single-bank and dual-bank modes.
+--- Bank two and DB1M can subdivide the 128 KiB blocks, never join them.
+M.flash_erase = {
+  STM32F429 = {
+    origin = 0x08000000,
+    sectors = {
+      { size = 16 * 1024, count = 4 },
+      { size = 64 * 1024, count = 1 },
+      { size = 128 * 1024, count = 15 },
+    },
+  },
+}
+
 ---@class Stm32Parts
 ---@field mcu string
 ---@field series string
@@ -217,24 +233,28 @@ end
 
 --- Resolve family and memory facts from a part number.
 ---@param mcu string|nil
+---@param core? string
 ---@return table|nil
-function M.resolve(mcu)
+function M.resolve(mcu, core)
   local parts = M.parse(mcu)
   if not parts then
     return nil
   end
   local family = M.families[parts.series]
+  local architecture = family.cores and family.cores[core] or family
   local observed = M.observed_devices[parts.device] or {}
+  local flash_erase = M.flash_erase[parts.device]
   return {
     device = parts.device,
     family = family.family,
-    core = family.core,
-    fpu = family.fpu,
+    core = architecture.core,
+    fpu = architecture.fpu,
     openocd_cfg = family.openocd_cfg,
     flash_kb = parts.flash and M.flash_sizes[parts.flash] or nil,
     ram_kb = M.ram_kb[parts.device],
     debug_ids = observed.debug_ids and vim.deepcopy(observed.debug_ids) or nil,
     debug_idcode_address = observed.debug_idcode_address,
+    flash_erase = flash_erase and vim.deepcopy(flash_erase) or nil,
   }
 end
 

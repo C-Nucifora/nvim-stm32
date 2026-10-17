@@ -8,6 +8,10 @@ local M = {}
 
 local next_plan_id = 0
 
+local function device_identity(device)
+  return vim.uv.fs_realpath(device) or device
+end
+
 local function monitor_error(code, message, command, output)
   return model.error({
     code = code,
@@ -79,6 +83,7 @@ function M.plan(project, opts)
   if not commands then
     return nil, command_err
   end
+  local identity = device_identity(device)
 
   next_plan_id = next_plan_id + 1
   return model.plan({
@@ -89,12 +94,13 @@ function M.plan(project, opts)
       return image.id
     end, copied.images),
     commands = commands,
-    locks = { { kind = "serial-device", id = device } },
+    locks = { { kind = "serial-device", id = identity } },
     reset_policy = "none",
     metadata = {
       project = copied,
       platform = platform,
       device = device,
+      device_identity = identity,
       baud = baud,
       selection_source = source,
     },
@@ -111,6 +117,12 @@ function M.validate(plan)
   end
   if type(plan.metadata.device) ~= "string" or plan.metadata.device == "" then
     error("plan.metadata.device: expected non-empty string")
+  end
+  if
+    type(plan.metadata.device_identity) ~= "string"
+    or plan.metadata.device_identity == ""
+  then
+    error("plan.metadata.device_identity: expected non-empty string")
   end
   if
     type(plan.metadata.baud) ~= "number"
@@ -137,7 +149,8 @@ function M.preflight(plan, opts)
     or plan.reset_policy ~= "none"
     or #plan.locks ~= 1
     or plan.locks[1].kind ~= "serial-device"
-    or plan.locks[1].id ~= device
+    or plan.locks[1].id ~= plan.metadata.device_identity
+    or device_identity(device) ~= plan.metadata.device_identity
     or not vim.deep_equal(plan.commands, expected_commands)
   then
     return nil,

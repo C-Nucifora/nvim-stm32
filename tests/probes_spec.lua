@@ -126,7 +126,7 @@ Found 1 stlink programmers
     })
 
     assert.is_nil(err)
-    assert.same({ tool, "--probe" }, vim.fn.readfile(argv_path))
+    assert.same({ tool, "--probe", "--hot-plug" }, vim.fn.readfile(argv_path))
     assert.equals(1, #listed)
     assert.equals("003F002A3138510E34383839", listed[1].serial)
     assert.equals("V3J15M7", listed[1].firmware)
