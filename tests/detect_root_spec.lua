@@ -87,7 +87,7 @@ describe("nvim-stm32.detect.start_dir", function()
 
   it("uses a directory buffer itself as the detection starting point", function()
     local buffer = vim.api.nvim_create_buf(true, false)
-    vim.api.nvim_buf_set_name(buffer, fixture("nucleo_cmake"))
+    vim.api.nvim_buf_set_name(buffer, fixture("nucleo_cmake") .. "/")
     local start = detect.start_dir(buffer)
     vim.api.nvim_buf_delete(buffer, { force = true })
 

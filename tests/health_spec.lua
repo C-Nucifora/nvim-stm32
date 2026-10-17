@@ -4,6 +4,18 @@ local probes = require("nvim-stm32.probes")
 local process = require("nvim-stm32.process")
 local tools = require("nvim-stm32.tools")
 
+local function check_report()
+  vim.cmd("checkhealth nvim-stm32")
+  local buffer = vim.api.nvim_get_current_buf()
+  assert.is_true(
+    vim.wait(2000, function()
+      return vim.api.nvim_buf_is_valid(buffer) and not vim.bo[buffer].modifiable
+    end, 10),
+    "health report did not finish rendering"
+  )
+  return table.concat(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), "\n")
+end
+
 describe("nvim-stm32.health.tool_status", function()
   it("reports a found tool with its path", function()
     local level, msg =
@@ -176,8 +188,7 @@ describe("nvim-stm32.health.check", function()
     -- even a check() that errors immediately; assert on a section title only
     -- our own code emits, and on the absence of a traceback, so this case
     -- actually fails when check() throws.
-    vim.cmd("checkhealth nvim-stm32")
-    local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    local out = check_report()
     assert.is_truthy(out:find("nvim-stm32: programmers", 1, true))
     assert.is_falsy(out:find("stack traceback", 1, true))
     vim.cmd("bwipeout!")
@@ -198,7 +209,7 @@ describe("nvim-stm32.health.check", function()
     end
 
     local ok, err = pcall(function()
-      vim.cmd("checkhealth nvim-stm32")
+      check_report()
     end)
     tools.programmer = original_programmer
     probes.enumerate = original_enumerate
@@ -224,7 +235,7 @@ describe("nvim-stm32.health.check", function()
     end
 
     local ok, err = pcall(function()
-      vim.cmd("checkhealth nvim-stm32")
+      check_report()
     end)
     devices.list = original_list
     process.run = original_run
@@ -236,8 +247,7 @@ describe("nvim-stm32.health.check", function()
   end)
 
   it("states the passive software boundary without touching hardware", function()
-    vim.cmd("checkhealth nvim-stm32")
-    local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    local out = check_report()
 
     assert.matches(
       "no probe connection, reset, erase, or program command",
@@ -258,8 +268,7 @@ describe("nvim-stm32.health project section", function()
       "edit " .. vim.fn.fnameescape(here .. "/fixtures/nucleo_cmake/Core/Src/main.c")
     )
     local source_buf = vim.api.nvim_get_current_buf()
-    vim.cmd("checkhealth nvim-stm32")
-    local out = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    local out = check_report()
     assert.is_truthy(out:find("STM32F429ZITx", 1, true))
     vim.cmd("bwipeout!")
     vim.api.nvim_buf_delete(source_buf, { force = true })
