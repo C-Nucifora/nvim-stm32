@@ -406,6 +406,8 @@ local function run_planned(project, plan, opts, callback)
   local target = project.images[1].target or {}
   local presenter
   local handle
+  local saw_output = false
+  local last_byte
   presenter = float.open(target, opts, function()
     if handle then
       handle.cancel("window-closed")
@@ -413,6 +415,10 @@ local function run_planned(project, plan, opts, callback)
   end)
   local run_opts = vim.tbl_deep_extend("force", {}, opts, {
     on_output = function(chunk)
+      if chunk and chunk ~= "" then
+        saw_output = true
+        last_byte = chunk:sub(-1)
+      end
       presenter:append(chunk)
       if opts.on_output then
         opts.on_output(chunk)
@@ -420,6 +426,22 @@ local function run_planned(project, plan, opts, callback)
     end,
   })
   handle = require("nvim-stm32.operation").run(plan, run_opts, function(result)
+    if not result.ok then
+      local had_output = saw_output
+      if not saw_output then
+        local output = result.output ~= "" and result.output
+          or result.error and result.error.output
+        if output and output ~= "" then
+          presenter:append(output)
+          had_output = true
+          last_byte = output:sub(-1)
+        end
+      end
+      if result.error and result.error.message then
+        local separator = had_output and last_byte ~= "\n" and "\n" or ""
+        presenter:append(separator .. result.error.message .. "\n")
+      end
+    end
     presenter:finish(result.ok)
     if callback then
       callback(result)

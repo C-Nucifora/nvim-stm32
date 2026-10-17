@@ -267,3 +267,68 @@ describe("nvim-stm32 build lifecycle", function()
     }, completion())
   end)
 end)
+
+describe("nvim-stm32 build failure output", function()
+  local float = require("nvim-stm32.ui.float")
+  local original_open, original_executable, original_run
+  local presenter
+
+  before_each(function()
+    original_open = float.open
+    original_executable = vim.fn.executable
+    original_run = process.run
+    presenter = { chunks = {} }
+    function presenter:append(chunk)
+      self.chunks[#self.chunks + 1] = chunk
+    end
+    function presenter:finish(ok)
+      self.ok = ok
+    end
+    float.open = function()
+      return presenter
+    end
+  end)
+
+  after_each(function()
+    float.open = original_open
+    vim.fn.executable = original_executable
+    process.run = original_run
+  end)
+
+  it("shows a missing tool error before a child can produce output", function()
+    vim.fn.executable = function()
+      return 0
+    end
+    local result
+    build.current({ project = project("/firmware/output", "make") }, function(value)
+      result = value
+    end)
+
+    assert.is_false(presenter.ok)
+    assert.equals("build-tool-unavailable", result.error.code)
+    assert.matches("tool not found: make", table.concat(presenter.chunks), 1, true)
+  end)
+
+  for _, streaming in ipairs({ false, true }) do
+    it("shows command failures once with streaming " .. tostring(streaming), function()
+      vim.fn.executable = function()
+        return 1
+      end
+      process.run = function(_, opts, callback)
+        if streaming then
+          opts.on_output("compiler error\n")
+        end
+        callback({ code = 2, signal = 0, output = "compiler error\n" })
+        return {}
+      end
+
+      build.current({ project = project("/firmware/output", "make") })
+
+      assert.is_false(presenter.ok)
+      local text = table.concat(presenter.chunks)
+      local _, count = text:gsub("compiler error", "")
+      assert.equals(1, count)
+      assert.matches("build command did not complete successfully", text, 1, true)
+    end)
+  end
+end)

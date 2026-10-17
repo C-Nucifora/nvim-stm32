@@ -8,7 +8,7 @@ local function target_detail_lines(target, include_mcu)
       lines[#lines + 1] = "MCU:     not resolved"
     end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = "Build and flash still work; family-specific features are off."
+    lines[#lines + 1] = "Build still works; flash requires a supported target identity."
     return lines
   end
 
