@@ -47,6 +47,7 @@ describe("nvim-stm32 monitor operation plans", function()
 
   after_each(function()
     session.clear()
+    vim.fn.delete(root, "rf")
   end)
 
   it(
@@ -165,6 +166,40 @@ describe("nvim-stm32 monitor operation plans", function()
     assert.equals(1, #plan.commands)
     assert.equals("stream", plan.commands[1].lifecycle)
     assert.is_nil(plan.commands[1].timeout_ms)
+  end)
+
+  it("shares one serial lock between a device and its symlink", function()
+    vim.fn.mkdir(root, "p")
+    local alias = root .. "/serial"
+    assert(vim.uv.fs_symlink("/dev/null", alias))
+    local first =
+      assert(monitor.plan(project(root), { device = "/dev/null", platform = "Linux" }))
+    local second =
+      assert(monitor.plan(project(root), { device = alias, platform = "Linux" }))
+    local release = assert(locks.acquire(first.id, first.locks))
+    local competing, err = locks.acquire(second.id, second.locks)
+    if competing then
+      competing()
+    end
+    release()
+
+    assert.is_nil(competing)
+    assert.equals("operation-lock-contended", err.code)
+  end)
+
+  it("rejects a serial symlink retargeted after planning", function()
+    vim.fn.mkdir(root, "p")
+    local alias = root .. "/serial"
+    assert(vim.uv.fs_symlink("/dev/null", alias))
+    local planned =
+      assert(monitor.plan(project(root), { device = alias, platform = "Linux" }))
+    assert(vim.uv.fs_unlink(alias))
+    assert(vim.uv.fs_symlink("/dev/zero", alias))
+
+    local allowed, err = monitor.preflight(planned, {})
+
+    assert.is_nil(allowed)
+    assert.equals("monitor-plan-tampered", err.code)
   end)
 end)
 
