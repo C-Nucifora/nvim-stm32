@@ -124,14 +124,15 @@ describe("nvim-stm32 flash driver resolution", function()
     local driver, resolved_tools = assert(flash.resolve(cfg, {}))
     local probe = { serial = "ABC123" }
     assert.same(
-      { st_info, "--probe" },
+      { st_info, "--probe", "--hot-plug" },
       driver.identify_command(resolved_tools.identify, probe).argv
     )
     assert.same(
       {
         st_flash,
         "--serial",
-        "0xABC123",
+        "ABC123",
+        "--hot-plug",
         "write",
         "/tmp/app.bin",
         "0x08000000",

@@ -1,6 +1,7 @@
 local flash = require("nvim-stm32.operations.flash")
 local model = require("nvim-stm32.model")
 local monitor = require("nvim-stm32.operations.monitor")
+local locks = require("nvim-stm32.locks")
 local probes = require("nvim-stm32.probes")
 local session = require("nvim-stm32.session")
 
@@ -110,6 +111,25 @@ local function run_flash(action, project_value, opts, run_opts)
   return result, handle, plan
 end
 
+local function planned_flash(project_value, artifacts)
+  return assert(flash.plan("flash", project_value, {
+    backend = "cubeprogrammer",
+    programmer_path = fixtures .. "/fake_programmer.sh",
+    configuration = "Debug",
+    probe_serial = "FAKE-F429-001",
+    artifacts = artifacts,
+    build_id = "fake-build-1",
+    toolchain_path = project_value.root .. "/tools",
+  }))
+end
+
+local function replace_objdump(root, script)
+  local path = root .. "/tools/arm-none-eabi-objdump"
+  assert(vim.uv.fs_unlink(path))
+  write(path, "#!/bin/sh\nset -eu\n" .. script)
+  assert(vim.uv.fs_chmod(path, 493))
+end
+
 local function fake_env(root, fail)
   return {
     NVIM_STM32_FAKE_ROOT = root .. "/fake-log",
@@ -200,7 +220,7 @@ describe("nvim-stm32 fake programmer integration", function()
       "cubeprogrammer:program-verify",
       "cubeprogrammer:reset",
     }, events(root))
-    assert.same(plan.commands[2].argv, argv_logs(root)[2])
+    assert.same(plan.commands[3].argv, argv_logs(root)[2])
   end)
 
   for _, failure in ipairs({
@@ -247,6 +267,116 @@ describe("nvim-stm32 fake programmer integration", function()
     assert.is_true(result.ok, vim.inspect(result))
     assert.same({ "cubeprogrammer:identify", "cubeprogrammer:erase" }, events(root))
   end)
+
+  it(
+    "keeps slow ELF inspection responsive and owns its locks until cancellation exits",
+    function()
+      local source_project = project(root)
+      local elf = artifact(root, "elf", "fake-build-1")
+      replace_objdump(root, "exec sleep 30\n")
+      local plan = planned_flash(source_project, { elf })
+      local result
+      local started = vim.uv.hrtime()
+      local handle = flash.execute(plan, { env = fake_env(root) }, function(value)
+        result = value
+      end)
+      assert.is_true((vim.uv.hrtime() - started) / 1000000 < 500)
+      local timer_ran = false
+      local blocked_after_cancel
+      vim.defer_fn(function()
+        timer_ran = true
+        assert.is_nil(result)
+        assert.is_true(handle.cancel())
+        local competing, err = locks.acquire("inspection-competitor", plan.locks)
+        blocked_after_cancel = not competing and err.code == "operation-lock-contended"
+        if competing then
+          competing()
+        end
+      end, 30)
+
+      assert.is_true(vim.wait(3000, function()
+        return result ~= nil
+      end))
+      assert.is_true(timer_ran)
+      assert.is_true(blocked_after_cancel)
+      assert.is_false(result.ok)
+      assert.equals("inspect-elf", result.error.phase)
+      assert.same({}, events(root))
+      local release = assert(locks.acquire("inspection-successor", plan.locks))
+      release()
+    end
+  )
+
+  it(
+    "rechecks artifacts changed during asynchronous ELF inspection before connecting",
+    function()
+      local source_project = project(root)
+      local elf = artifact(root, "elf", "fake-build-1")
+      replace_objdump(
+        root,
+        [[
+printf 'changed firmware' >> "$2"
+printf '%s\n' \
+  '  0 .text         00000008  08000000  08000000  00001000  2**2' \
+  '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
+]]
+      )
+      local plan = planned_flash(source_project, { elf })
+      local result
+      flash.execute(plan, { env = fake_env(root) }, function(value)
+        result = value
+      end)
+
+      assert.is_true(vim.wait(3000, function()
+        return result ~= nil
+      end))
+      assert.is_false(result.ok)
+      assert.equals("flash-artifact-changed", result.error.code)
+      assert.equals("inspect-elf", result.error.phase)
+      assert.same({}, events(root))
+    end
+  )
+
+  it(
+    "validates the final image inspection before any multi-image hardware command",
+    function()
+      local source_project = project(root)
+      local first = artifact(root, "elf", "fake-build-1")
+      local second_image = vim.deepcopy(source_project.images[1])
+      second_image.id = "second"
+      second_image.name = "second"
+      source_project.images[2] = second_image
+      local second = vim.deepcopy(first)
+      second.image_id = "second"
+      second.path = root .. "/build/Debug/second.elf"
+      write(second.path, "firmware")
+      second.modified_ns = modified_ns(second.path)
+      replace_objdump(
+        root,
+        [[
+case "$2" in
+  *application.elf) address=08000000 ;;
+  *) address=08400000 ;;
+esac
+printf '  0 .text         00000008  %s  %s  00001000  2**2\n' "$address" "$address"
+printf '%s\n' '                  CONTENTS, ALLOC, LOAD, READONLY, CODE'
+]]
+      )
+      local plan = planned_flash(source_project, { first, second })
+      local result
+      flash.execute(plan, { env = fake_env(root) }, function(value)
+        result = value
+      end)
+
+      assert.is_true(vim.wait(3000, function()
+        return result ~= nil
+      end))
+      assert.is_false(result.ok)
+      assert.equals("flash-range-outside-region", result.error.code)
+      assert.equals("second", result.error.image_id)
+      assert.same({}, events(root))
+    end
+  )
 end)
 
 describe("nvim-stm32 alternative fake backend integration", function()
@@ -287,7 +417,8 @@ describe("nvim-stm32 alternative fake backend integration", function()
     assert.same({
       stlink,
       "--serial",
-      "0xFAKEF429001",
+      "FAKEF429001",
+      "--hot-plug",
       "write",
       vim.fn.resolve(bin.path),
       "0x08000000",

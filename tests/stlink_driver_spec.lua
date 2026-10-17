@@ -7,8 +7,11 @@ local probe = { backend = "stlink", serial = "ABC123" }
 
 describe("nvim-stm32 stlink driver commands", function()
   it("enumerates and identifies through the passive st-info probe command", function()
-    assert.same({ st_info, "--probe" }, driver.list_command(st_info).argv)
-    assert.same({ st_info, "--probe" }, driver.identify_command(st_info, probe).argv)
+    assert.same({ st_info, "--probe", "--hot-plug" }, driver.list_command(st_info).argv)
+    assert.same(
+      { st_info, "--probe", "--hot-plug" },
+      driver.identify_command(st_info, probe).argv
+    )
   end)
 
   it("programs and verifies a BIN at its validated address", function()
@@ -21,7 +24,8 @@ describe("nvim-stm32 stlink driver commands", function()
     assert.same({
       st_flash,
       "--serial",
-      "0xABC123",
+      "ABC123",
+      "--hot-plug",
       "write",
       "/tmp/app.bin",
       "0x08000000",
@@ -30,13 +34,23 @@ describe("nvim-stm32 stlink driver commands", function()
 
   it("mass erases and resets only the selected probe", function()
     assert.same(
-      { st_flash, "--serial", "0xABC123", "erase" },
+      { st_flash, "--serial", "ABC123", "--hot-plug", "erase" },
       driver.erase_command(st_flash, probe).argv
     )
     assert.same(
-      { st_flash, "--serial", "0xABC123", "reset" },
+      { st_flash, "--serial", "ABC123", "--hot-plug", "reset" },
       driver.reset_command(st_flash, probe).argv
     )
+  end)
+
+  it("removes an optional numeric prefix from the literal USB serial", function()
+    assert.same(
+      driver.erase_command(st_flash, probe).argv,
+      driver.erase_command(st_flash, { serial = "0xABC123" }).argv
+    )
+    assert.has_error(function()
+      driver.erase_command(st_flash, { serial = "0x" })
+    end)
   end)
 
   it("rejects artifacts other than BIN and invalid addresses", function()

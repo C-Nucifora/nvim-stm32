@@ -82,6 +82,8 @@ The report lists each signal and how many agree.
 Each project image keeps its own target and artifacts. Build results record the
 selected configuration and build identifier, so flash and analysis never pick
 an ELF with a glob or reuse an unrelated build.
+BIN and HEX companions older than their matching ELF are excluded from the build
+result. Regenerate them when the selected backend requires one.
 
 ## Commands
 
@@ -94,7 +96,7 @@ an ELF with a glob or reuse an unrelated build.
   Make projects run their Makefile target.
 - `:STM32Analyze` runs `arm-none-eabi-size` and `arm-none-eabi-objdump` against
   the current build's ELF, then reports flash and RAM use by linker region.
-- `:STM32SelectProbe` passively lists ST-LINK probes and stores the chosen
+- `:STM32SelectProbe` lists ST-LINK probes without resetting them and stores the chosen
   serial number for the current project.
 - `:STM32Flash` builds the selected configuration, checks the connected target,
   programs and verifies every image in project order, then performs one reset.
@@ -119,16 +121,25 @@ The default baud is 115200 with raw, 8-bit, no-parity, one-stop-bit settings.
 Project discovery, `:STM32Info`, `:STM32Plan`, and `:checkhealth` are passive.
 They do not connect to a target, reset or halt it, erase flash, or program an
 image. Probe enumeration uses CubeProgrammer's ST-LINK-only listing or
-`st-info --probe`.
+`st-info --probe --hot-plug`. The st-info fallback reads target debug registers
+without resetting or halting the connected boards.
 
 Before any hardware-changing command, the plugin validates the project, chosen
 configuration, selected probe, target identity policy, artifact freshness, and
 flash layout. A target mismatch stops before programming unless the direct API
-invocation explicitly allows that one plan. Multi-image flashes retain project
-order and reset once, after all images verify. Direct API callers must create a
-newly confirmed plan immediately before every erase. Cancellation signals only
-the child process started by the plugin and releases its probe or serial-device
-lock after that child exits.
+invocation explicitly allows that one plan. Multi-image flashes require
+CubeProgrammer or OpenOCD and reject images whose erase sectors overlap, including
+gaps between ELF load sections. The stlink backend supports one image per operation
+because st-flash resumes the target after each write. F429 erase boundaries are
+conservative across bank modes; other targets need known erase geometry before
+multi-image programming is allowed.
+
+ELF inspection runs asynchronously before the target connection and can be
+cancelled with the operation. Direct API callers must create a newly confirmed
+plan immediately before every erase; each confirmed plan can execute only once.
+Cancellation signals only the child process started by the plugin and releases
+its probe or serial-device lock after that child exits. Serial-device locks also
+cover symlinks to the selected device.
 
 ## Software-only validation
 

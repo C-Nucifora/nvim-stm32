@@ -11,6 +11,7 @@ local tool_resolver = require("nvim-stm32.tools")
 local M = {}
 
 local next_plan_id = 0
+local erase_authorizations = {}
 
 local function flash_error(code, message, action, image_id)
   return model.error({
@@ -173,6 +174,14 @@ function M.plan(action, project, opts)
     return nil, tools_or_err
   end
   local tool_paths = tools_or_err
+  if action == "flash" and driver.id == "stlink" and #resolved.images > 1 then
+    return nil,
+      flash_error(
+        "flash-backend-multi-image-unsupported",
+        "st-flash resumes the target after each write; use cubeprogrammer or openocd for multiple images",
+        action
+      )
+  end
   if
     type(driver.identify_command) ~= "function"
     or type(driver.parse_identity) ~= "function"
@@ -322,7 +331,14 @@ function M.plan(action, project, opts)
       })
     end
   end
-  return model.plan({
+  for index = #elf_commands, 1, -1 do
+    table.insert(commands, 1, vim.deepcopy(elf_commands[index]))
+    table.insert(steps, 1, {
+      phase = "inspect-elf",
+      image_id = resolved_layout[index].image_id,
+    })
+  end
+  local plan = model.plan({
     id = action .. "-" .. next_plan_id,
     kind = action,
     project_id = resolved.project.id,
@@ -349,6 +365,10 @@ function M.plan(action, project, opts)
       allow_target_mismatch = opts.allow_target_mismatch == true,
     },
   })
+  if action == "erase" and opts.confirmed == true and opts.preview ~= true then
+    erase_authorizations[plan.id] = vim.deepcopy(plan)
+  end
+  return plan
 end
 
 local function decorated_error(err, plan, step, command_result)
@@ -415,7 +435,7 @@ local function selected_images(project, image_ids)
 end
 
 local function expected_commands(plan, driver)
-  local commands = {}
+  local commands = vim.deepcopy(plan.metadata.elf_commands)
   commands[#commands + 1] =
     driver.identify_command(plan.metadata.tools.identify, plan.metadata.probe)
   if plan.kind == "flash" then
@@ -441,7 +461,11 @@ local function expected_commands(plan, driver)
 end
 
 local function expected_steps(plan)
-  local steps = { { phase = "identify", image_id = nil } }
+  local steps = {}
+  for _, command in ipairs(plan.metadata.elf_commands) do
+    steps[#steps + 1] = { phase = "inspect-elf", image_id = command.image_id }
+  end
+  steps[#steps + 1] = { phase = "identify", image_id = nil }
   if plan.kind == "flash" then
     for _, item in ipairs(plan.metadata.layout) do
       steps[#steps + 1] = {
@@ -507,33 +531,7 @@ local function expected_elf_commands(plan, driver)
   return commands
 end
 
-function M.inspect_elf_command(command, item, cfg)
-  if vim.fn.executable(command.argv[1]) ~= 1 then
-    return nil,
-      flash_error(
-        "flash-tool-unavailable",
-        "required ELF inspection tool not found: " .. command.argv[1],
-        "flash",
-        item.image_id
-      )
-  end
-  local result = vim
-    .system(command.argv, {
-      cwd = command.cwd,
-      env = vim.tbl_extend("force", {}, cfg.env or {}, tool_resolver.env(cfg)),
-      text = true,
-    })
-    :wait(command.timeout_ms)
-  local output = (result.stdout or "") .. (result.stderr or "")
-  if not process.succeeded(result) then
-    return nil,
-      flash_error(
-        "flash-elf-inspection-failed",
-        "could not inspect ELF load sections: " .. item.artifact.path,
-        "flash",
-        item.image_id
-      )
-  end
+function M.inspect_elf_command(_, item, output)
   local sections, sections_err = objdump.parse_sections(output)
   if not sections then
     sections_err.operation = "flash"
@@ -543,9 +541,14 @@ function M.inspect_elf_command(command, item, cfg)
   return sections
 end
 
-function M.preflight(plan, cfg)
+function M.preflight(plan, cfg, sections)
   if
-    plan.kind == "erase" and (plan.metadata.preview or not plan.metadata.confirmed)
+    plan.kind == "erase"
+    and (
+      plan.metadata.preview
+      or not plan.metadata.confirmed
+      or not vim.deep_equal(erase_authorizations[plan.id], plan)
+    )
   then
     return nil,
       flash_error(
@@ -590,6 +593,14 @@ function M.preflight(plan, cfg)
   end
   local expected_locks = {}
   if plan.kind == "flash" then
+    if driver.id == "stlink" and #images > 1 then
+      return nil,
+        flash_error(
+          "flash-backend-multi-image-unsupported",
+          "st-flash resumes the target after each write; use cubeprogrammer or openocd for multiple images",
+          "flash"
+        )
+    end
     expected_locks[#expected_locks + 1] = context.artifact_lock(plan.metadata.project)
   end
   expected_locks[#expected_locks + 1] = {
@@ -637,17 +648,6 @@ function M.preflight(plan, cfg)
           plan.kind
         )
     end
-    local sections = {}
-    for index, item in ipairs(plan.metadata.layout) do
-      local command_spec = plan.metadata.elf_commands[index]
-      if command_spec then
-        local parsed, parse_err = M.inspect_elf_command(command_spec, item, cfg)
-        if not parsed then
-          return nil, parse_err
-        end
-        sections[item.image_id] = parsed
-      end
-    end
     local checked, checked_err = layout.resolve(
       {
         project = plan.metadata.project,
@@ -659,7 +659,10 @@ function M.preflight(plan, cfg)
         return item.artifact
       end, plan.metadata.layout),
       driver,
-      { sections = sections }
+      {
+        sections = sections,
+        defer_elf = driver.artifact_kind == "elf" and sections == nil,
+      }
     )
     if not checked then
       return nil, checked_err
@@ -681,6 +684,9 @@ function M.preflight(plan, cfg)
       end
     end
   end
+  if plan.kind == "erase" then
+    erase_authorizations[plan.id] = nil
+  end
   return true
 end
 
@@ -700,7 +706,7 @@ local function accepted_identity(target, observed)
   return false
 end
 
-function M.after_command(plan, command_result, command_index)
+function M.after_command(plan, command_result, command_index, cfg, sections)
   local step = plan.metadata.steps[command_index]
   if not step then
     return nil,
@@ -711,7 +717,24 @@ function M.after_command(plan, command_result, command_index)
       )
   end
   local driver = driver_registry.backends[plan.metadata.backend]
-  if step.phase == "identify" then
+  if step.phase == "inspect-elf" then
+    local item = plan.metadata.layout[command_index]
+    local parsed, parse_err = M.inspect_elf_command(
+      plan.metadata.elf_commands[command_index],
+      item,
+      command_result.output
+    )
+    if not parsed then
+      return nil, decorated_error(parse_err, plan, step, command_result)
+    end
+    sections[item.image_id] = parsed
+    if command_index == #plan.metadata.elf_commands then
+      local ready, ready_err = M.preflight(plan, cfg, sections)
+      if not ready then
+        return nil, decorated_error(ready_err, plan, step, command_result)
+      end
+    end
+  elseif step.phase == "identify" then
     local ok, identity, identity_err =
       pcall(parse_identity, driver, plan, command_result.output)
     if not ok then
@@ -777,12 +800,13 @@ end
 
 local function hooks()
   local command_index = 0
+  local sections = {}
   return {
     validate = M.validate,
     preflight = M.preflight,
-    after_command = function(plan, command_result)
+    after_command = function(plan, command_result, cfg)
       command_index = command_index + 1
-      return M.after_command(plan, command_result, command_index)
+      return M.after_command(plan, command_result, command_index, cfg, sections)
     end,
     complete = M.complete,
   }

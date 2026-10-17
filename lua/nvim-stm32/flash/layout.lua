@@ -1,5 +1,6 @@
 local linker = require("nvim-stm32.inspect.linker")
 local model = require("nvim-stm32.model")
+local targets = require("nvim-stm32.targets")
 
 local M = {}
 
@@ -369,6 +370,47 @@ local function resolve_image(context, artifacts, image, kind, binary_real, opts)
   }
 end
 
+local function erase_range(image, item)
+  local facts = targets.resolve(image.target.mcu) or {}
+  local geometry = facts.flash_erase
+  if not geometry then
+    return nil,
+      layout_error(
+        "flash-erase-geometry-unsupported",
+        "safe multi-image erase boundaries are unknown for " .. image.id,
+        image.id
+      )
+  end
+  local start, finish
+  for _, range in ipairs(item.ranges) do
+    start = math.min(start or range.start, range.start)
+    finish = math.max(finish or range.finish, range.finish)
+  end
+  local span = {}
+  local address = geometry.origin
+  for _, group in ipairs(geometry.sectors) do
+    for _ = 1, group.count do
+      local next_address = address + group.size
+      if start >= address and start < next_address then
+        span.start = address
+      end
+      if finish > address and finish <= next_address then
+        span.finish = next_address
+      end
+      address = next_address
+    end
+  end
+  if not span.start or not span.finish then
+    return nil,
+      layout_error(
+        "flash-erase-geometry-unsupported",
+        "image range exceeds known erase boundaries for " .. image.id,
+        image.id
+      )
+  end
+  return span
+end
+
 function M.resolve(context, artifacts, backend, opts)
   opts = opts or {}
   vim.validate("context", context, "table")
@@ -419,6 +461,36 @@ function M.resolve(context, artifacts, backend, opts)
                   .. right.image_id
               )
           end
+        end
+      end
+    end
+  end
+  if #resolved > 1 and not opts.defer_elf then
+    local images = {}
+    for _, image in ipairs(context.images) do
+      images[image.id] = image
+    end
+    local spans = {}
+    for _, item in ipairs(resolved) do
+      local span, span_err = erase_range(images[item.image_id], item)
+      if not span then
+        return nil, span_err
+      end
+      spans[#spans + 1] = span
+    end
+    -- Backends may erase the whole image envelope, including section holes.
+    for left_index, left in ipairs(spans) do
+      for right_index = left_index + 1, #spans do
+        local right = spans[right_index]
+        if left.start < right.finish and right.start < left.finish then
+          return nil,
+            layout_error(
+              "flash-erase-overlap",
+              "selected images share erase sectors: "
+                .. resolved[left_index].image_id
+                .. " and "
+                .. resolved[right_index].image_id
+            )
         end
       end
     end

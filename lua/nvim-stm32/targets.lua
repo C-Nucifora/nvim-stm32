@@ -174,6 +174,19 @@ M.observed_devices = {
   },
 }
 
+--- Coarse erase boundaries shared by single-bank and dual-bank modes.
+--- Bank two and DB1M can subdivide the 128 KiB blocks, never join them.
+M.flash_erase = {
+  STM32F429 = {
+    origin = 0x08000000,
+    sectors = {
+      { size = 16 * 1024, count = 4 },
+      { size = 64 * 1024, count = 1 },
+      { size = 128 * 1024, count = 15 },
+    },
+  },
+}
+
 ---@class Stm32Parts
 ---@field mcu string
 ---@field series string
@@ -230,6 +243,7 @@ function M.resolve(mcu, core)
   local family = M.families[parts.series]
   local architecture = family.cores and family.cores[core] or family
   local observed = M.observed_devices[parts.device] or {}
+  local flash_erase = M.flash_erase[parts.device]
   return {
     device = parts.device,
     family = family.family,
@@ -240,6 +254,7 @@ function M.resolve(mcu, core)
     ram_kb = M.ram_kb[parts.device],
     debug_ids = observed.debug_ids and vim.deepcopy(observed.debug_ids) or nil,
     debug_idcode_address = observed.debug_idcode_address,
+    flash_erase = flash_erase and vim.deepcopy(flash_erase) or nil,
   }
 end
 
