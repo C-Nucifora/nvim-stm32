@@ -65,6 +65,12 @@ local function kind_for(path)
   return kinds[path:lower():match("(%.[^.]+)$")]
 end
 
+local function older_than(stat, reference)
+  local modified, expected = stat.mtime, reference.mtime
+  return modified.sec < expected.sec
+    or (modified.sec == expected.sec and modified.nsec < expected.nsec)
+end
+
 local function add_artifact(
   found,
   seen,
@@ -74,13 +80,21 @@ local function add_artifact(
   build_target,
   path,
   build_id,
-  source
+  source,
+  elf_stat
 )
   local real, stat_or_err = existing_path(root_real, path, image.id)
   if not real then
     return nil, stat_or_err
   end
   local kind = kind_for(real)
+  if
+    (kind == "bin" or kind == "hex")
+    and elf_stat
+    and older_than(stat_or_err, elf_stat)
+  then
+    return true
+  end
   local identity = real
   if stat_or_err.dev and stat_or_err.ino then
     identity = tostring(stat_or_err.dev) .. ":" .. tostring(stat_or_err.ino)
@@ -142,14 +156,15 @@ function M.from_cmake(project, config, reply, build_id)
       return nil, build_target_or_err
     end
     local build_target = build_target_or_err
-    local elf_paths = {}
+    local elf_paths, elf_stats = {}, {}
     for _, path in ipairs(target.artifacts or {}) do
-      local real, path_err = existing_path(root_real, path, image.id)
+      local real, stat_or_err = existing_path(root_real, path, image.id)
       if not real then
-        return nil, path_err
+        return nil, stat_or_err
       end
       if kind_for(real) == "elf" then
         elf_paths[#elf_paths + 1] = real
+        elf_stats[real] = stat_or_err
       end
     end
     if #elf_paths == 0 then
@@ -195,7 +210,8 @@ function M.from_cmake(project, config, reply, build_id)
             build_target,
             sibling,
             build_id,
-            "cmake-file-api"
+            "cmake-file-api",
+            elf_stats[elf]
           )
           if not added then
             return nil, add_err
@@ -241,11 +257,12 @@ function M.from_tree(project, config, build_id)
     return nil, error("artifact-missing", "no artifacts found under " .. root)
   end
 
-  local elf_stems = {}
+  local elf_stems, elf_stats = {}, {}
   for _, path in ipairs(paths) do
     if kind_for(path) == "elf" then
       elf_stems[#elf_stems + 1] =
         vim.fn.fnamemodify(vim.fn.fnamemodify(path, ":t"), ":r")
+      elf_stats[vim.fn.fnamemodify(path, ":r")] = vim.uv.fs_stat(path)
     end
   end
 
@@ -264,7 +281,8 @@ function M.from_tree(project, config, build_id)
       build_target_or_err,
       path,
       build_id,
-      "tree"
+      "tree",
+      elf_stats[vim.fn.fnamemodify(path, ":r")]
     )
     if not added then
       return nil, add_err
