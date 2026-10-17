@@ -4,10 +4,11 @@ local signals = require("nvim-stm32.discover.signals")
 local targets = require("nvim-stm32.targets")
 
 local M = {}
+local core_hints = { CM4 = "cortex-m4", CM7 = "cortex-m7" }
 
 local function multi_image_preset(dir)
   local image_id = vim.fs.basename(dir):upper()
-  if image_id ~= "CM4" and image_id ~= "CM7" then
+  if (image_id ~= "CM4" and image_id ~= "CM7") or vim.uv.fs_stat(dir .. "/.git") then
     return nil, nil, nil
   end
   local parent = vim.fs.dirname(dir)
@@ -24,7 +25,6 @@ end
 
 local function target_from(group, all_signals)
   local found = group[1]
-  local info = found.mcu and targets.resolve(found.mcu) or {}
   local device = found.mcu and targets.parse(found.mcu).device or nil
   local agreement, board, core, fpu = 0, nil, nil, nil
   for _, signal in ipairs(all_signals) do
@@ -35,13 +35,17 @@ local function target_from(group, all_signals)
     core = core or signal.core
     fpu = fpu or signal.fpu
   end
+  local info = found.mcu
+      and targets.resolve(found.mcu, core or core_hints[found.image_hint])
+    or {}
+  core = core or info.core
   return {
     root = nil,
     marker = nil,
     build_backend = nil,
     mcu = found.mcu,
     family = info.family,
-    core = core or info.core,
+    core = core,
     fpu = fpu or info.fpu,
     flash_kb = info.flash_kb,
     ram_kb = info.ram_kb,
@@ -60,7 +64,11 @@ end
 
 local function group_key(signal)
   local device = targets.parse(signal.mcu).device
-  return table.concat({ signal.image_hint or "", device, signal.core or "" }, "\0")
+  return table.concat({
+    signal.image_hint or "",
+    device,
+    not signal.image_hint and signal.core or "",
+  }, "\0")
 end
 
 local function collect_groups(found)
@@ -165,6 +173,18 @@ function M.resolve(dir)
       project_root, adapter, marker = multi_root, multi_adapter, multi_marker
     end
   end
+  if not adapter then
+    for _, candidate in ipairs(root.markers) do
+      if
+        candidate.backend
+        and candidate.file
+        and vim.fn.filereadable(project_root .. "/" .. candidate.file) == 1
+      then
+        adapter = candidate.backend
+        break
+      end
+    end
+  end
 
   local found = signals.collect(project_root)
   local groups, candidates = collect_groups(found)
@@ -191,10 +211,15 @@ function M.resolve(dir)
     end
     local target = target_from(group, image_signals)
     local local_core, local_fpu = nil, nil
+    local build_targets = {}
     for _, signal in ipairs(image_signals) do
       local_core = local_core or signal.core
       local_fpu = local_fpu or signal.fpu
+      if signal.build_target then
+        build_targets[signal.build_target] = true
+      end
     end
+    build_targets = vim.tbl_keys(build_targets)
     target.core = local_core or measured_core or target.core
     target.fpu = local_fpu or measured_fpu or target.fpu
     target.root = project_root
@@ -204,6 +229,7 @@ function M.resolve(dir)
       id = id,
       name = id,
       target = target,
+      build_target = #build_targets == 1 and build_targets[1] or nil,
     })
   end
 

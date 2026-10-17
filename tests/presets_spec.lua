@@ -7,6 +7,35 @@ local function fixture(rel)
 end
 
 describe("nvim-stm32 CMake preset resolution", function()
+  it(
+    "resolves relative output directories against the source rather than cwd",
+    function()
+      local root = vim.fn.tempname()
+      vim.fn.mkdir(root, "p")
+      vim.fn.writefile({
+        [[{"configurePresets":[{"name":"Debug","binaryDir":"out/debug"}]}]],
+      }, root .. "/CMakePresets.json")
+
+      local config = assert(presets.configurations(root))[1]
+      local command = presets.build_command({ root = root }, config)
+      assert.same({ "cmake", "--build", root .. "/out/debug" }, command.argv)
+      vim.fn.delete(root, "rf")
+    end
+  )
+
+  it("preserves percent signs in source directories and preset names", function()
+    local tmp = vim.fn.tempname()
+    local root = tmp .. "/100%source"
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({
+      [[{"configurePresets":[{"name":"Debug%25","binaryDir":"${sourceDir}/out/${presetName}"}]}]],
+    }, root .. "/CMakePresets.json")
+
+    local config = assert(presets.configurations(root))[1]
+    assert.equals(root .. "/out/Debug%25", config.binary_dir)
+    vim.fn.delete(tmp, "rf")
+  end)
+
   it("maps a build preset to its configure preset", function()
     local configs = assert(presets.configurations(fixture("preset_inheritance")))
     assert.same({

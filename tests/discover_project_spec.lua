@@ -15,6 +15,137 @@ local function write(path, lines)
 end
 
 describe("nvim-stm32 project discovery", function()
+  it("builds from a strong .ioc root with a colocated CMake or Make file", function()
+    local tmp = vim.fn.tempname()
+    for marker, adapter in pairs({ CMakeLists = "cmake_plain", Makefile = "make" }) do
+      local dir = tmp .. "/" .. marker
+      write(dir .. "/app.ioc", vim.fn.readfile(fixture("ioc_only/dt.ioc")))
+      write(dir .. "/" .. (marker == "CMakeLists" and "CMakeLists.txt" or marker), {
+        "# build root",
+      })
+      write(dir .. "/generated/CMakeLists.txt", { "# generated CMake" })
+
+      local resolved = assert(project.resolve(dir .. "/generated"))
+      assert.equals(dir, resolved.root)
+      assert.equals(adapter, resolved.kind)
+      local plan = assert(require("nvim-stm32.operations.build").plan(resolved))
+      assert.equals(dir, plan.commands[1].cwd)
+      assert.equals(adapter == "make" and "make" or "cmake", plan.commands[1].argv[1])
+    end
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it(
+    "does not promote a CM4 Git repository into its parent's dual-core project",
+    function()
+      local tmp = vim.fn.tempname()
+      write(tmp .. "/CMakePresets.json", { "{}" })
+      write(tmp .. "/CM4/.git", { "gitdir: ../git-worktree" })
+      for _, core in ipairs({ "CM4", "CM7" }) do
+        write(
+          tmp .. "/" .. core .. "/app.ioc",
+          vim.fn.readfile(fixture("multi_image/" .. core .. "/app.ioc"))
+        )
+      end
+
+      local resolved = assert(project.resolve(tmp .. "/CM4"))
+      assert.equals(tmp .. "/CM4", resolved.root)
+      assert.equals(1, #resolved.images)
+      vim.fn.delete(tmp, "rf")
+    end
+  )
+
+  it("merges inferred startup and CMake evidence for each hinted core", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    for _, core in ipairs({ "CM4", "CM7" }) do
+      write(
+        tmp .. "/" .. core .. "/startup_stm32h747xx.s",
+        vim.fn.readfile(fixture("multi_image/" .. core .. "/startup_stm32h747xx.s"))
+      )
+      write(tmp .. "/" .. core .. "/CMakeLists.txt", {
+        "add_compile_definitions(STM32H747xx)",
+      })
+    end
+
+    local resolved = assert(project.resolve(tmp))
+    assert.equals(2, #resolved.images)
+    assert.equals("CM4", resolved.images[1].id)
+    assert.equals("cortex-m4", resolved.images[1].target.core)
+    assert.equals("CM7", resolved.images[2].id)
+    assert.equals("cortex-m7", resolved.images[2].target.core)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it(
+    "keeps an H7 CM4 identity hint without startup or compiler measurements",
+    function()
+      local tmp = vim.fn.tempname()
+      write(tmp .. "/app.ioc", vim.fn.readfile(fixture("multi_image/CM4/app.ioc")))
+
+      local target = assert(detect.target(tmp))
+      assert.equals("cortex-m4", target.core)
+      assert.equals("fpv4-sp-d16", target.fpu)
+      vim.fn.delete(tmp, "rf")
+    end
+  )
+
+  it("maps literal executable artifacts to their discovered core images", function()
+    local tmp = vim.fn.tempname()
+    write(tmp .. "/CMakePresets.json", { "{}" })
+    local reply = { targets = {} }
+    for _, core in ipairs({ "CM4", "CM7" }) do
+      local name = "firmware_" .. core
+      write(tmp .. "/" .. core .. "/CMakeLists.txt", {
+        "add_compile_definitions(STM32H747xx)",
+        "add_executable(" .. name .. " main.c)",
+      })
+      local elf = tmp .. "/build/" .. name .. ".elf"
+      write(elf, { "ELF" })
+      reply.targets[#reply.targets + 1] = {
+        name = name,
+        type = "EXECUTABLE",
+        artifacts = { elf },
+      }
+    end
+
+    local resolved = assert(project.resolve(tmp))
+    local found = assert(
+      require("nvim-stm32.discover.artifacts").from_cmake(
+        resolved,
+        { name = "Debug", binary_dir = tmp .. "/build" },
+        reply
+      )
+    )
+    assert.equals(2, #found)
+    assert.equals("CM4", found[1].image_id)
+    assert.equals("firmware_CM4", found[1].build_target)
+    assert.equals("CM7", found[2].image_id)
+    assert.equals("firmware_CM7", found[2].build_target)
+    vim.fn.delete(tmp, "rf")
+  end)
+
+  it("leaves dynamic ambiguous and custom targets unmapped", function()
+    local tmp = vim.fn.tempname()
+    local declarations = {
+      { "add_executable(firmware_${BOARD} main.c)" },
+      { "add_executable(firmware main.c)", "add_executable(helper helper.c)" },
+      { "add_custom_target(firmware ALL)" },
+    }
+    for index, commands in ipairs(declarations) do
+      local dir = tmp .. "/" .. index
+      write(dir .. "/CMakePresets.json", { "{}" })
+      write(
+        dir .. "/CMakeLists.txt",
+        vim.list_extend({ "add_compile_definitions(STM32F429xx)" }, commands)
+      )
+
+      local resolved = assert(project.resolve(dir))
+      assert.is_nil(resolved.images[1].build_target)
+    end
+    vim.fn.delete(tmp, "rf")
+  end)
+
   it("prefers the outer project over generated nested CMake", function()
     local found = assert(root.find(fixture("nucleo_cmake/cmake/stm32cubemx")))
     assert.equals(fixture("nucleo_cmake"), found)

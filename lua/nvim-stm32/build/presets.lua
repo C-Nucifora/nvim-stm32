@@ -145,8 +145,15 @@ end
 
 local function binary_dir(root, preset)
   local value = preset.binaryDir or "${sourceDir}/build/${presetName}"
-  value = value:gsub("${sourceDir}", root)
-  value = value:gsub("${presetName}", preset.name)
+  value = value:gsub("${sourceDir}", function()
+    return root
+  end)
+  value = value:gsub("${presetName}", function()
+    return preset.name
+  end)
+  if value:sub(1, 1) ~= "/" then
+    value = root .. "/" .. value
+  end
   return value
 end
 

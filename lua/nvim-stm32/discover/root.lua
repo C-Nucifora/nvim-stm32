@@ -20,8 +20,9 @@ end
 
 function M.start_dir(bufnr)
   local name = buffer_name(bufnr or 0)
-  if name ~= "" and vim.uv.fs_stat(name) then
-    return vim.fs.dirname(name)
+  if name ~= "" and not name:match("^%w+://") then
+    local stat = vim.uv.fs_stat(name)
+    return stat and stat.type == "directory" and name or vim.fs.dirname(name)
   end
   return vim.fn.getcwd()
 end

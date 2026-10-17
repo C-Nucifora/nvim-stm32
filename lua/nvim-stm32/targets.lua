@@ -88,6 +88,9 @@ M.families = {
     core = "cortex-m7",
     fpu = "fpv5-d16",
     openocd_cfg = "target/stm32h7x.cfg",
+    cores = {
+      ["cortex-m4"] = { core = "cortex-m4", fpu = "fpv4-sp-d16" },
+    },
   },
   L0 = {
     family = "STM32L0",
@@ -217,19 +220,21 @@ end
 
 --- Resolve family and memory facts from a part number.
 ---@param mcu string|nil
+---@param core? string
 ---@return table|nil
-function M.resolve(mcu)
+function M.resolve(mcu, core)
   local parts = M.parse(mcu)
   if not parts then
     return nil
   end
   local family = M.families[parts.series]
+  local architecture = family.cores and family.cores[core] or family
   local observed = M.observed_devices[parts.device] or {}
   return {
     device = parts.device,
     family = family.family,
-    core = family.core,
-    fpu = family.fpu,
+    core = architecture.core,
+    fpu = architecture.fpu,
     openocd_cfg = family.openocd_cfg,
     flash_kb = parts.flash and M.flash_sizes[parts.flash] or nil,
     ram_kb = M.ram_kb[parts.device],
